@@ -68,7 +68,7 @@ func (o *tracesWorker) Init(statsBuilder stats.Builder, client *http.Client) err
 	o.statBytesSent = statsBuilder.NewStat(stats.StatBytesSent)
 	o.statBytesSentZ = statsBuilder.NewStat(stats.StatBytesSentZ)
 	o.statBatchesSent = statsBuilder.NewStat(stats.StatBatchesSent)
-	o.statTracesSent = statsBuilder.NewStat(stats.StatLogsSent)
+	o.statTracesSent = statsBuilder.NewStat(stats.StatSpansSent)
 
 	if o.useGRPC {
 		opts := []grpc.DialOption{
@@ -233,17 +233,18 @@ func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource) []*otlpTraces.R
 		}
 
 		traceId := util.GenOtelId(16)		
-		firstSpanId := util.GenOtelId(8)
+		nowNano := time.Now().UnixNano()
 
 		for i := 0; i < o.spansPerResource; i++ {
-			now := time.Now()
+			startTime := nowNano + int64(i) * int64(10_000_000)
+			
 			span := &otlpTraces.Span{
 				TraceId:           traceId,
 				TraceState:        "active",
-				Name:              "pg_connect",
+				Name:              getSpanName(i),
 				Kind:              otlpTraces.Span_SPAN_KIND_SERVER,
-				StartTimeUnixNano: uint64(now.UnixNano()),
-				EndTimeUnixNano:   uint64(now.UnixNano() + 1),
+				StartTimeUnixNano: uint64(startTime),
+				EndTimeUnixNano:   uint64(nowNano + int64(o.spansPerResource) * int64(10_000_000)),
 				Attributes: []*otlpCommon.KeyValue{
 					{
 						Key:   "index",
@@ -251,22 +252,20 @@ func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource) []*otlpTraces.R
 					},
 				},
 				DroppedAttributesCount: 0,
-				Events:                 make([]*otlpTraces.Span_Event, 0),
+				Events:                 make([]*otlpTraces.Span_Event, 0, 1),
 				DroppedEventsCount:     0,
 				Links:                  nil,
 				DroppedLinksCount:      0,
 				Status:                 nil,
 			}
 			
-			if i == 0 {
-				span.SpanId = firstSpanId
-			} else {
-				span.SpanId = util.GenOtelId(8)
-				span.ParentSpanId = firstSpanId
+			span.SpanId = util.GenOtelId(8)
+			if i > 0 {
+				span.ParentSpanId = rs.ScopeSpans[0].Spans[i - 1].SpanId
 			}
 
 			event := &otlpTraces.Span_Event{
-				TimeUnixNano:           uint64(now.UnixNano()),
+				TimeUnixNano:           uint64(startTime + 5_000_000),
 				Name:                   "db-connect",
 				Attributes:             nil,
 				DroppedAttributesCount: 0,
@@ -282,5 +281,21 @@ func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource) []*otlpTraces.R
 	return spans
 }
 
+// Common OpenTelemetry span names for realistic telemetry data
+var commonSpanNames = []string{
+ "http_request",
+ "database_query",
+ "cache_get",
+ "service_call",
+ "file_read",
+ "authentication",
+ "message_publish",
+ "queue_consume",
+ "template_render",
+ "json_parse",
+}
 
-
+// getSpanName returns a span name based on the provided index
+func getSpanName(index int) string {
+ return commonSpanNames[index%len(commonSpanNames)]
+}

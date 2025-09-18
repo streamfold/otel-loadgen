@@ -24,7 +24,6 @@ func (s *stat) Incr(delta uint64) {
 	s.value.Add(delta)
 }
 
-
 type StatType int
 
 const (
@@ -33,6 +32,7 @@ const (
 	StatBatchesSent
 	StatMetricsSent
 	StatLogsSent
+	StatSpansSent
 )
 
 func (s StatType) String() string {
@@ -47,6 +47,8 @@ func (s StatType) String() string {
 		return "metrics_sent"
 	case StatLogsSent:
 		return "logs_sent"
+	case StatSpansSent:
+		return "spans_sent"
 	default:
 		return "unknown"
 	}
@@ -64,6 +66,8 @@ func (s StatType) desc() string {
 		return "metrics"
 	case StatLogsSent:
 		return "logs"
+	case StatSpansSent:
+		return "spans"
 	default:
 		return ""
 	}
@@ -81,6 +85,8 @@ func (s StatType) unit() string {
 		return "metrics"
 	case StatLogsSent:
 		return "logs"
+	case StatSpansSent:
+		return "spans"
 	default:
 		return ""
 	}
@@ -89,17 +95,18 @@ func (s StatType) unit() string {
 func (s StatType) factor() float64 {
 	switch s {
 	case StatBytesSent:
-		return 1024.0*1024.0
+		return 1024.0 * 1024.0
 	case StatBytesSentZ:
-		return 1024.0*1024.0
+		return 1024.0 * 1024.0
 	case StatBatchesSent:
 		return 1.0
 	case StatMetricsSent:
 		return 1.0
 	case StatLogsSent:
 		return 1.0
+	case StatSpansSent:
+		return 1.0
 	default:
 		return 0.0
 	}
 }
-
