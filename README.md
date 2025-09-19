@@ -54,6 +54,12 @@ make build
 # The binary will be created at dist/otel-loadgen
 ```
 
+### Running from Docker container
+
+```bash
+docker run -ti streamfold/otel-loadgen traces [...]
+```
+
 ### Running
 
 ```bash
