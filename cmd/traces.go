@@ -30,7 +30,7 @@ var tracesCmd = &cobra.Command{
 var spansPerResource int
 
 func init() {
-	rootCmd.AddCommand(tracesCmd)
+	genCmd.AddCommand(tracesCmd)
 
 	tracesCmd.Flags().IntVar(&spansPerResource, "spans-per-resource", 100, "How many trace spans per resource to generate")
 }
