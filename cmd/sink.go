@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/streamfold/otel-loadgen/internal/control"
+	"github.com/streamfold/otel-loadgen/internal/msg_tracker"
 	"github.com/streamfold/otel-loadgen/internal/sink"
 	"go.uber.org/zap"
 )
@@ -42,6 +43,8 @@ func runSink() error {
 		return err
 	}
 
+	mt := msg_tracker.NewTracker()
+
 	// Start the sink server
 	s, err := sink.New(sinkAddr, zl)
 	if err != nil {
@@ -55,7 +58,7 @@ func runSink() error {
 	zl.Info("Sink server has been started", zap.String("addr", s.Addr()))
 
 	// Start the control server
-	c := control.New(controlAddr, zl)
+	c := control.New(controlAddr, mt, zl)
 	if err := c.Start(); err != nil {
 		s.Stop()
 		return err

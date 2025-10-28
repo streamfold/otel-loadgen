@@ -4,24 +4,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 
+	"github.com/streamfold/otel-loadgen/internal/msg_tracker"
 	"go.uber.org/zap"
 )
 
 type Server struct {
-	addr   string
-	log    *zap.Logger
-	srv    *http.Server
-	mu     sync.RWMutex
-	ranges []MessageRange
+	addr string
+	log  *zap.Logger
+	mt   *msg_tracker.Tracker
+	srv  *http.Server
 }
 
-func New(addr string, log *zap.Logger) *Server {
+func New(addr string, mt *msg_tracker.Tracker, log *zap.Logger) *Server {
 	s := &Server{
-		addr:   addr,
-		log:    log,
-		ranges: make([]MessageRange, 0),
+		addr: addr,
+		log:  log,
+		mt:   mt,
 	}
 
 	mux := http.NewServeMux()
@@ -78,14 +77,7 @@ func (s *Server) handlePublished(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	s.ranges = append(s.ranges, MessageRange{
-		GeneratorID: pub.GeneratorID,
-		StartID:     pub.StartID,
-		EndID:       pub.EndID,
-		Timestamp:   pub.Timestamp,
-	})
-	s.mu.Unlock()
+	s.mt.AddRange(pub.GeneratorID, pub.StartID, pub.EndID, pub.Timestamp)
 
 	s.log.Info("received published notification",
 		zap.String("generator_id", pub.GeneratorID),
@@ -97,13 +89,4 @@ func (s *Server) handlePublished(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-func (s *Server) GetRanges() []MessageRange {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	ranges := make([]MessageRange, len(s.ranges))
-	copy(ranges, s.ranges)
-	return ranges
 }
