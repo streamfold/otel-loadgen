@@ -4,23 +4,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/streamfold/otel-loadgen/internal/msg_tracker"
 	"go.uber.org/zap"
 )
 
 type Server struct {
-	addr string
-	log  *zap.Logger
-	mt   *msg_tracker.Tracker
-	srv  *http.Server
+	addr           string
+	log            *zap.Logger
+	mt             *msg_tracker.Tracker
+	srv            *http.Server
+	reportInterval time.Duration
+	reportStop     chan bool
+	reportWg       *sync.WaitGroup
 }
 
-func New(addr string, mt *msg_tracker.Tracker, log *zap.Logger) *Server {
+func New(addr string, mt *msg_tracker.Tracker, reportInterval time.Duration, log *zap.Logger) *Server {
 	s := &Server{
-		addr: addr,
-		log:  log,
-		mt:   mt,
+		addr:           addr,
+		log:            log,
+		mt:             mt,
+		reportInterval: reportInterval,
 	}
 
 	mux := http.NewServeMux()
@@ -42,13 +49,58 @@ func (s *Server) Start() error {
 			s.log.Error("control server error", zap.Error(err))
 		}
 	}()
+	
+	s.reportStop = make(chan bool)
+	s.reportWg = &sync.WaitGroup{}
+	s.reportWg.Add(1)
+	
+	go func() {
+		defer s.reportWg.Done()
+		
+		tm := time.NewTicker(s.reportInterval)
+		for {
+			select {
+				case <-tm.C:
+					s.report()
+				case <-s.reportStop:
+					tm.Stop()
+					return
+			}
+		}
+	}()
 
 	return nil
 }
 
+func (s *Server) report() {
+	var sb strings.Builder
+	
+	defer func() {
+		fmt.Printf("REPORT: %s\n", sb.String())
+	}()
+	
+	unacked := s.mt.UnackedOlderThan(time.Now().Add(-1 * s.reportInterval))
+	if len(unacked) == 0 {
+		sb.WriteString("All messages acked")
+		return
+	}
+	acked := s.mt.AckedCount()
+	
+	for genID, count := range unacked {
+		sb.WriteString(fmt.Sprintf("Generator %s, unacked: %d", genID, count))
+		genAcked, exists := acked[genID]
+		if exists {
+			sb.WriteString(fmt.Sprintf(", acked: %d", genAcked))
+		}
+	}
+}
+
 func (s *Server) Stop() error {
 	s.log.Debug("Stopping control server")
-	return s.srv.Close()
+	err := s.srv.Close()
+	close(s.reportStop)
+	s.reportWg.Wait()
+	return err
 }
 
 func (s *Server) Addr() string {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/streamfold/otel-loadgen/internal/control"
@@ -30,12 +31,15 @@ var sinkCmd = &cobra.Command{
 
 var sinkAddr string
 var controlAddr string
+var sinkReportInterval time.Duration
 
 func init() {
 	rootCmd.AddCommand(sinkCmd)
 
 	sinkCmd.Flags().StringVar(&sinkAddr, "addr", "localhost:5317", "address to listen on")
 	sinkCmd.Flags().StringVar(&controlAddr, "control-addr", "localhost:5000", "control server address")
+	
+	sinkCmd.Flags().DurationVar(&sinkReportInterval, "report-interval", 3 * time.Second, "interval to report delivery statistics")
 }
 
 func runSink() error {
@@ -47,7 +51,7 @@ func runSink() error {
 	mt := msg_tracker.NewTracker()
 
 	// Start the sink server
-	s, err := sink.New(sinkAddr, zl)
+	s, err := sink.New(sinkAddr, mt, zl)
 	if err != nil {
 		return err
 	}
@@ -57,9 +61,9 @@ func runSink() error {
 	}
 
 	zl.Info("Sink server has been started", zap.String("addr", s.Addr()))
-
+	
 	// Start the control server
-	c := control.New(controlAddr, mt, zl)
+	c := control.New(controlAddr, mt, sinkReportInterval, zl)
 	if err := c.Start(); err != nil {
 		s.Stop()
 		return err

@@ -23,10 +23,10 @@ type msgIdRange struct {
 	timestamp time.Time
 }
 
-type msgId struct {
-	startId uint64
-	len     uint
-	id      uint64
+type MsgID struct {
+	StartID uint64
+	Len     uint
+	ID      uint64
 }
 
 func NewMsgIdGenerator(generatorId string, ctrlChan chan<- control.MessageRange) *MsgIdGenerator {
@@ -51,15 +51,15 @@ func (g *MsgIdGenerator) AddElementAttrs(attrs []*otlpCommon.KeyValue) []*otlpCo
 
 	attrs = append(attrs, &otlpCommon.KeyValue{
 		Key:   string(ELEM_ATTR_START_RANGE),
-		Value: &otlpCommon.AnyValue{Value: &otlpCommon.AnyValue_IntValue{IntValue: int64(nextId.startId)}},
+		Value: &otlpCommon.AnyValue{Value: &otlpCommon.AnyValue_IntValue{IntValue: int64(nextId.StartID)}},
 	})
 	attrs = append(attrs, &otlpCommon.KeyValue{
 		Key:   string(ELEM_ATTR_RANGE_LEN),
-		Value: &otlpCommon.AnyValue{Value: &otlpCommon.AnyValue_IntValue{IntValue: int64(nextId.len)}},
+		Value: &otlpCommon.AnyValue{Value: &otlpCommon.AnyValue_IntValue{IntValue: int64(nextId.Len)}},
 	})
 	attrs = append(attrs, &otlpCommon.KeyValue{
 		Key:   string(ELEM_ATTR_MESSAGE_ID),
-		Value: &otlpCommon.AnyValue{Value: &otlpCommon.AnyValue_IntValue{IntValue: int64(nextId.id)}},
+		Value: &otlpCommon.AnyValue{Value: &otlpCommon.AnyValue_IntValue{IntValue: int64(nextId.ID)}},
 	})
 
 	return attrs
@@ -79,7 +79,7 @@ func (g *MsgIdGenerator) nextRange(len uint) *msgIdRange {
 		g.crtlChan <- control.MessageRange{
 			GeneratorID: g.generatorId,
 			StartID:     mid.startId,
-			RangeLen: mid.len,
+			RangeLen:    mid.len,
 			Timestamp:   mid.timestamp,
 		}
 
@@ -88,7 +88,7 @@ func (g *MsgIdGenerator) nextRange(len uint) *msgIdRange {
 	return mid
 }
 
-func (g *MsgIdGenerator) nextId() msgId {
+func (g *MsgIdGenerator) nextId() MsgID {
 	if g.currRange == nil || g.currRange.isFull() {
 		g.currRange = g.nextRange(ALLOC_SIZE)
 	}
@@ -100,7 +100,7 @@ func (r *msgIdRange) isFull() bool {
 	return r.used >= r.len
 }
 
-func (r *msgIdRange) nextId() msgId {
+func (r *msgIdRange) nextId() MsgID {
 	if r.isFull() {
 		panic("nextId called on full range")
 	}
@@ -108,9 +108,70 @@ func (r *msgIdRange) nextId() msgId {
 	nextId := r.startId + uint64(r.used)
 	r.used += 1
 
-	return msgId{
-		startId: r.startId,
-		len:     r.len,
-		id:      nextId,
+	return MsgID{
+		StartID: r.startId,
+		Len:     r.len,
+		ID:      nextId,
+	}
+}
+
+func ExtractGeneratorId(attrs []*otlpCommon.KeyValue) string {
+	for _, attr := range attrs {
+		if attr.Key == RES_ATTR_GENERATOR_ID {
+			return attr.Value.String()
+		}
+	}
+
+	return ""
+}
+
+func ExtractMsgIdParams(attrs []*otlpCommon.KeyValue) (MsgID, bool) {
+	var msgID MsgID
+	var haveStartID, haveLen, haveID bool
+
+	for _, attr := range attrs {
+		if attr.Key == ELEM_ATTR_START_RANGE {
+			startID, got := getIntValue(attr.Value)
+			if !got {
+				return msgID, false
+			}
+			msgID.StartID = uint64(startID)
+			haveStartID = true
+		}
+		if attr.Key == ELEM_ATTR_RANGE_LEN {
+			len, got := getIntValue(attr.Value)
+			if !got {
+				return msgID, false
+			}
+			msgID.Len = uint(len)
+			haveLen = true
+		}
+		if attr.Key == ELEM_ATTR_MESSAGE_ID {
+			id, got := getIntValue(attr.Value)
+			if !got {
+				return msgID, false
+			}
+			msgID.ID = uint64(id)
+			haveID = true
+		}
+		
+		if haveID && haveLen && haveStartID {
+			break
+		}
+	}
+	
+	return msgID, haveID && haveLen && haveStartID
+}
+
+func getIntValue(value *otlpCommon.AnyValue) (int64, bool) {
+	if value == nil {
+		return 0, false
+	}
+
+	switch v := value.GetValue().(type) {
+	case *otlpCommon.AnyValue_IntValue:
+		return v.IntValue, true
+	default:
+		return 0, false
 	}
 }

@@ -1,17 +1,19 @@
 package msg_tracker
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
 
 // MessageRange represents a range of message IDs with a bitmask for tracking acknowledgments
 type MessageRange struct {
+	sync.RWMutex
 	StartID        uint64
 	RangeLen       uint
 	Timestamp      time.Time
-	AckedCount     uint    // Number of unique messages acked
-	DuplicateCount uint    // Number of duplicate acks received
+	AckedCount     uint     // Number of unique messages acked
+	DuplicateCount uint     // Number of duplicate acks received
 	bitmap         []uint64 // Each uint64 holds 64 bits
 }
 
@@ -33,10 +35,14 @@ func NewMessageRange(startID uint64, rangeLen uint) *MessageRange {
 // Ack marks a message ID as acknowledged
 // Returns true if the message was in range, false otherwise
 func (mr *MessageRange) Ack(msgID uint64) bool {
-	if !mr.Contains(msgID) {
+	mr.Lock()
+	defer mr.Unlock()
+
+	if !mr.contains(msgID) {
+		fmt.Printf("does not contain msgID: %d\n", msgID)
 		return false
 	}
-	
+
 	offset := msgID - mr.StartID
 	idx := offset / 64
 	bit := offset % 64
@@ -59,7 +65,10 @@ func (mr *MessageRange) Ack(msgID uint64) bool {
 
 // IsAcked checks if a message ID has been acknowledged
 func (mr *MessageRange) IsAcked(msgID uint64) bool {
-	if !mr.Contains(msgID) {
+	mr.RLock()
+	defer mr.RUnlock()
+
+	if !mr.contains(msgID) {
 		return false
 	}
 
@@ -71,18 +80,43 @@ func (mr *MessageRange) IsAcked(msgID uint64) bool {
 }
 
 // Contains checks if the range contains the given message ID
-func (mr *MessageRange) Contains(msgID uint64) bool {
-	return msgID >= mr.StartID && msgID < mr.StartID + uint64(mr.RangeLen)
+func (mr *MessageRange) contains(msgID uint64) bool {
+	return msgID >= mr.StartID && msgID < mr.StartID+uint64(mr.RangeLen)
 }
 
 // TotalMessages returns the total number of messages in the range
 func (mr *MessageRange) TotalMessages() uint {
+	// This field is static
 	return mr.RangeLen
+}
+
+func (mr *MessageRange) TotalAckedCount() uint {
+	mr.RLock()
+	defer mr.RUnlock()
+
+	return mr.AckedCount
 }
 
 // UnackedCount returns the number of messages that have not been acknowledged
 func (mr *MessageRange) UnackedCount() uint {
+	mr.RLock()
+	defer mr.RUnlock()
+
 	return mr.TotalMessages() - mr.AckedCount
+}
+
+func (mr *MessageRange) UpdateTimestamp(timestamp time.Time) {
+	mr.Lock()
+	defer mr.Unlock()
+
+	mr.Timestamp = timestamp
+}
+
+func (mr *MessageRange) OlderThan(timestamp time.Time) bool {
+	mr.RLock()
+	defer mr.RUnlock()
+
+	return !mr.Timestamp.IsZero() && mr.Timestamp.Before(timestamp)
 }
 
 // generatorTracker holds all ranges for a specific generator ID
@@ -98,7 +132,7 @@ func newGeneratorTracker() *generatorTracker {
 }
 
 // findRange finds the range containing the given message ID
-func (gt *generatorTracker) findRange(startRangeID uint64, rangeLen uint) *MessageRange {
+func (gt *generatorTracker) findRange(startRangeID uint64) *MessageRange {
 	return gt.ranges[startRangeID]
 }
 
@@ -116,6 +150,7 @@ func (gt *generatorTracker) addRange(startID uint64, rangeLen uint) *MessageRang
 // addRangeWithTimestamp adds a new range with timestamp, or updates timestamp if range exists
 func (gt *generatorTracker) addRangeWithTimestamp(startID uint64, rangeLen uint, timestamp time.Time) *MessageRange {
 	if r, exists := gt.ranges[startID]; exists {
+		r.UpdateTimestamp(timestamp)
 		r.Timestamp = timestamp
 		return r
 	}
@@ -131,9 +166,17 @@ func (gt *generatorTracker) unackedOlderThan(timestamp time.Time) uint {
 	var total uint
 	for _, r := range gt.ranges {
 		// Only count ranges with a timestamp before the given timestamp
-		if !r.Timestamp.IsZero() && r.Timestamp.Before(timestamp) {
+		if r.OlderThan(timestamp) {
 			total += r.UnackedCount()
 		}
+	}
+	return total
+}
+
+func (gt *generatorTracker) ackedCount() uint {
+	var total uint
+	for _, r := range gt.ranges {
+		total += r.TotalAckedCount()
 	}
 	return total
 }
@@ -172,13 +215,13 @@ func (t *Tracker) Ack(generatorID string, startRangeID uint64, rangeLen uint, ms
 
 	// Lock the generator tracker
 	gt.mu.Lock()
-	defer gt.mu.Unlock()
 
 	// Find or create the range
-	r := gt.findRange(startRangeID, rangeLen)
+	r := gt.findRange(startRangeID)
 	if r == nil {
 		r = gt.addRange(startRangeID, rangeLen)
 	}
+	gt.mu.Unlock()
 
 	// Ack the message
 	return r.Ack(msgID)
@@ -225,12 +268,31 @@ func (t *Tracker) IsAcked(generatorID string, startRangeID uint64, rangeLen uint
 	gt.mu.RLock()
 	defer gt.mu.RUnlock()
 
-	r := gt.findRange(startRangeID, rangeLen)
+	r := gt.findRange(startRangeID)
 	if r == nil {
 		return false
 	}
 
 	return r.IsAcked(msgID)
+}
+
+func (t *Tracker) AckedCount() map[string]uint {
+	result := make(map[string]uint)
+
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	for generatorID, gt := range t.generators {
+		gt.mu.RLock()
+		acked := gt.ackedCount()
+		gt.mu.RUnlock()
+
+		if acked > 0 {
+			result[generatorID] = acked
+		}
+	}
+
+	return result
 }
 
 // UnackedOlderThan returns a map of generator ID to the total number of unacked messages

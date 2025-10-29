@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/streamfold/otel-loadgen/internal/msg_tracker"
 	v1 "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	v1_metrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	v1_trace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -18,9 +19,10 @@ type Sink struct {
 	addr *url.URL
 	log  *zap.Logger
 	srv  *grpc.Server
+	mt *msg_tracker.Tracker
 }
 
-func New(addr string, log *zap.Logger) (*Sink, error) {
+func New(addr string, mt *msg_tracker.Tracker, log *zap.Logger) (*Sink, error) {
 	if !strings.HasPrefix(addr, "http://") && !strings.HasPrefix(addr, "https://") {
 		addr = fmt.Sprintf("http://%s", addr)
 	}
@@ -32,6 +34,7 @@ func New(addr string, log *zap.Logger) (*Sink, error) {
 	return &Sink{
 		addr: u,
 		log:  log,
+		mt: mt,
 		srv:  grpc.NewServer(),
 	}, nil
 }
@@ -41,11 +44,11 @@ func (s *Sink) Addr() string {
 }
 
 func (s *Sink) Start() error {
-	v1.RegisterLogsServiceServer(s.srv, &otlpLogsRPCService{log: s.log})
-	v1_trace.RegisterTraceServiceServer(s.srv, &otlpTracesRPCService{log: s.log})
-	v1_metrics.RegisterMetricsServiceServer(s.srv, &otlpMetricsRPCService{log: s.log})
+	v1.RegisterLogsServiceServer(s.srv, &otlpLogsRPCService{log: s.log, mt: s.mt})
+	v1_trace.RegisterTraceServiceServer(s.srv, &otlpTracesRPCService{log: s.log, mt: s.mt})
+	v1_metrics.RegisterMetricsServiceServer(s.srv, &otlpMetricsRPCService{log: s.log, mt: s.mt})
 
-	fmt.Println("Starting sink on", fmt.Sprintf(":%s", s.addr.Port()))
+	s.log.Info("Starting sink", zap.String("addr", fmt.Sprintf(":%s", s.addr.Port())))
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", s.addr.Port()))
 	if err != nil {
 		return err

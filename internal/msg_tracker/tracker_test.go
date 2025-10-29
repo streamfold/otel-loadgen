@@ -281,7 +281,7 @@ func TestTracker_AddRangeTimestamp(t *testing.T) {
 	}
 
 	gt.mu.RLock()
-	r := gt.findRange(0, 101)
+	r := gt.findRange(0)
 	gt.mu.RUnlock()
 
 	if r == nil {
@@ -299,7 +299,7 @@ func TestTracker_AddRangeTimestamp(t *testing.T) {
 
 	// Verify timestamp was updated
 	gt.mu.RLock()
-	r = gt.findRange(0, 101)
+	r = gt.findRange(0)
 	gt.mu.RUnlock()
 
 	if r == nil {
