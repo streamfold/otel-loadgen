@@ -35,7 +35,7 @@ func New(addr string, mt *msg_tracker.Tracker, log *zap.Logger) *Server {
 }
 
 func (s *Server) Start() error {
-	s.log.Info("Starting control server", zap.String("addr", s.addr))
+	s.log.Debug("Starting control server", zap.String("addr", s.addr))
 
 	go func() {
 		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -47,7 +47,7 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Stop() error {
-	s.log.Info("Stopping control server")
+	s.log.Debug("Stopping control server")
 	return s.srv.Close()
 }
 
@@ -72,19 +72,18 @@ func (s *Server) handlePublished(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "generator_id is required", http.StatusBadRequest)
 		return
 	}
-	if pub.StartID > pub.EndID {
-		http.Error(w, "start_id must be <= end_id", http.StatusBadRequest)
+	if pub.RangeLen == 0 {
+		http.Error(w, "range_len is required", http.StatusBadRequest)
 		return
 	}
 
-	s.mt.AddRange(pub.GeneratorID, pub.StartID, pub.EndID, pub.Timestamp)
+	s.mt.AddRange(pub.GeneratorID, pub.StartID, pub.RangeLen, pub.Timestamp)
 
-	s.log.Info("received published notification",
+	s.log.Debug("received published notification",
 		zap.String("generator_id", pub.GeneratorID),
-		zap.Int64("start_id", pub.StartID),
-		zap.Int64("end_id", pub.EndID),
+		zap.Uint64("start_id", pub.StartID),
+		zap.Uint("range_len", pub.RangeLen),
 		zap.Time("timestamp", pub.Timestamp),
-		zap.Int64("count", pub.EndID-pub.StartID+1),
 	)
 
 	w.WriteHeader(http.StatusOK)

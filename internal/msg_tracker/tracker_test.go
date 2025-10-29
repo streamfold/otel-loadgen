@@ -7,13 +7,13 @@ import (
 )
 
 func TestMessageRange_NewAndAck(t *testing.T) {
-	mr := NewMessageRange(100, 200)
+	mr := NewMessageRange(100, 101) // 101 messages: 100-200 inclusive
 
 	if mr.StartID != 100 {
 		t.Errorf("Expected StartID 100, got %d", mr.StartID)
 	}
-	if mr.EndID != 200 {
-		t.Errorf("Expected EndID 200, got %d", mr.EndID)
+	if mr.RangeLen != 101 {
+		t.Errorf("Expected RangeLen 101, got %d", mr.RangeLen)
 	}
 
 	// Ack a message in range
@@ -42,7 +42,7 @@ func TestMessageRange_NewAndAck(t *testing.T) {
 }
 
 func TestMessageRange_OutOfRange(t *testing.T) {
-	mr := NewMessageRange(100, 200)
+	mr := NewMessageRange(100, 101) // 101 messages: 100-200 inclusive
 
 	// Ack outside range
 	if mr.Ack(99) {
@@ -62,7 +62,7 @@ func TestMessageRange_OutOfRange(t *testing.T) {
 
 func TestMessageRange_BitmaskStorage(t *testing.T) {
 	// Test that bitmask correctly stores multiple acks
-	mr := NewMessageRange(0, 127)
+	mr := NewMessageRange(0, 128) // 128 messages: 0-127 inclusive
 
 	// Ack multiple messages across different uint64 blocks
 	mr.Ack(0)
@@ -89,17 +89,17 @@ func TestTracker_BasicAck(t *testing.T) {
 	tracker := NewTracker()
 
 	// Ack a message (should create generator and range automatically)
-	if !tracker.Ack("gen1", 0, 100, 50) {
+	if !tracker.Ack("gen1", 0, 101, 50) {
 		t.Error("Expected Ack to return true")
 	}
 
 	// Verify it's acked
-	if !tracker.IsAcked("gen1", 0, 100, 50) {
+	if !tracker.IsAcked("gen1", 0, 101, 50) {
 		t.Error("Expected message 50 to be acked")
 	}
 
 	// Verify other messages aren't acked
-	if tracker.IsAcked("gen1", 0, 100, 51) {
+	if tracker.IsAcked("gen1", 0, 101, 51) {
 		t.Error("Expected message 51 to not be acked")
 	}
 }
@@ -108,21 +108,21 @@ func TestTracker_MultipleGenerators(t *testing.T) {
 	tracker := NewTracker()
 
 	// Ack messages for different generators
-	tracker.Ack("gen1", 0, 100, 50)
-	tracker.Ack("gen2", 0, 100, 50)
-	tracker.Ack("gen1", 0, 100, 75)
+	tracker.Ack("gen1", 0, 101, 50)
+	tracker.Ack("gen2", 0, 101, 50)
+	tracker.Ack("gen1", 0, 101, 75)
 
 	// Verify isolation between generators
-	if !tracker.IsAcked("gen1", 0, 100, 50) {
+	if !tracker.IsAcked("gen1", 0, 101, 50) {
 		t.Error("Expected gen1 message 50 to be acked")
 	}
-	if !tracker.IsAcked("gen1", 0, 100, 75) {
+	if !tracker.IsAcked("gen1", 0, 101, 75) {
 		t.Error("Expected gen1 message 75 to be acked")
 	}
-	if !tracker.IsAcked("gen2", 0, 100, 50) {
+	if !tracker.IsAcked("gen2", 0, 101, 50) {
 		t.Error("Expected gen2 message 50 to be acked")
 	}
-	if tracker.IsAcked("gen2", 0, 100, 75) {
+	if tracker.IsAcked("gen2", 0, 101, 75) {
 		t.Error("Expected gen2 message 75 to not be acked")
 	}
 }
@@ -131,23 +131,23 @@ func TestTracker_MultipleRanges(t *testing.T) {
 	tracker := NewTracker()
 
 	// Ack messages in different ranges for same generator
-	tracker.Ack("gen1", 0, 100, 50)
-	tracker.Ack("gen1", 101, 200, 150)
-	tracker.Ack("gen1", 0, 100, 75)
+	tracker.Ack("gen1", 0, 101, 50)
+	tracker.Ack("gen1", 101, 100, 150)
+	tracker.Ack("gen1", 0, 101, 75)
 
 	// Verify both ranges work correctly
-	if !tracker.IsAcked("gen1", 0, 100, 50) {
+	if !tracker.IsAcked("gen1", 0, 101, 50) {
 		t.Error("Expected message 50 in range 0-100 to be acked")
 	}
-	if !tracker.IsAcked("gen1", 0, 100, 75) {
+	if !tracker.IsAcked("gen1", 0, 101, 75) {
 		t.Error("Expected message 75 in range 0-100 to be acked")
 	}
-	if !tracker.IsAcked("gen1", 101, 200, 150) {
+	if !tracker.IsAcked("gen1", 101, 100, 150) {
 		t.Error("Expected message 150 in range 101-200 to be acked")
 	}
 
 	// Verify ranges are isolated
-	if tracker.IsAcked("gen1", 101, 200, 50) {
+	if tracker.IsAcked("gen1", 101, 100, 50) {
 		t.Error("Expected message 50 in range 101-200 to not be acked")
 	}
 }
@@ -157,17 +157,17 @@ func TestTracker_AddRange(t *testing.T) {
 
 	// Add a range without acking
 	ts := time.Now()
-	tracker.AddRange("gen1", 0, 100, ts)
+	tracker.AddRange("gen1", 0, 101, ts)
 
 	// Verify range exists but no messages are acked
-	if tracker.IsAcked("gen1", 0, 100, 50) {
+	if tracker.IsAcked("gen1", 0, 101, 50) {
 		t.Error("Expected no messages to be acked after AddRange")
 	}
 
 	// Now ack a message in the range
-	tracker.Ack("gen1", 0, 100, 50)
+	tracker.Ack("gen1", 0, 101, 50)
 
-	if !tracker.IsAcked("gen1", 0, 100, 50) {
+	if !tracker.IsAcked("gen1", 0, 101, 50) {
 		t.Error("Expected message 50 to be acked")
 	}
 }
@@ -185,7 +185,7 @@ func TestTracker_Concurrency(t *testing.T) {
 		go func(genID int) {
 			defer wg.Done()
 			for j := 0; j < numMessages; j++ {
-				tracker.Ack("gen1", 0, 10000, int64(genID*numMessages+j))
+				tracker.Ack("gen1", 0, 10001, uint64(genID*numMessages+j))
 			}
 		}(i)
 	}
@@ -195,8 +195,8 @@ func TestTracker_Concurrency(t *testing.T) {
 	// Verify all messages were acked
 	for i := 0; i < numGoroutines; i++ {
 		for j := 0; j < numMessages; j++ {
-			msgID := int64(i*numMessages + j)
-			if !tracker.IsAcked("gen1", 0, 10000, msgID) {
+			msgID := uint64(i*numMessages + j)
+			if !tracker.IsAcked("gen1", 0, 10001, msgID) {
 				t.Errorf("Expected message %d to be acked", msgID)
 			}
 		}
@@ -217,7 +217,7 @@ func TestTracker_ConcurrentGenerators(t *testing.T) {
 			defer wg.Done()
 			genID := string(rune('A' + genNum))
 			for j := 0; j < numMessages; j++ {
-				tracker.Ack(genID, 0, 1000, int64(j))
+				tracker.Ack(genID, 0, 1001, uint64(j))
 			}
 		}(i)
 	}
@@ -228,7 +228,7 @@ func TestTracker_ConcurrentGenerators(t *testing.T) {
 	for i := 0; i < numGenerators; i++ {
 		genID := string(rune('A' + i))
 		for j := 0; j < numMessages; j++ {
-			if !tracker.IsAcked(genID, 0, 1000, int64(j)) {
+			if !tracker.IsAcked(genID, 0, 1001, uint64(j)) {
 				t.Errorf("Expected message %d for generator %s to be acked", j, genID)
 			}
 		}
@@ -239,27 +239,27 @@ func TestTracker_LargeRange(t *testing.T) {
 	tracker := NewTracker()
 
 	// Test with a large range
-	startID := int64(0)
-	endID := int64(1000000)
+	startID := uint64(0)
+	rangeLen := uint(1000001)
 
-	tracker.AddRange("gen1", startID, endID, time.Now())
+	tracker.AddRange("gen1", startID, rangeLen, time.Now())
 
 	// Ack some messages
-	tracker.Ack("gen1", startID, endID, 0)
-	tracker.Ack("gen1", startID, endID, 500000)
-	tracker.Ack("gen1", startID, endID, 1000000)
+	tracker.Ack("gen1", startID, rangeLen, 0)
+	tracker.Ack("gen1", startID, rangeLen, 500000)
+	tracker.Ack("gen1", startID, rangeLen, 1000000)
 
 	// Verify
-	if !tracker.IsAcked("gen1", startID, endID, 0) {
+	if !tracker.IsAcked("gen1", startID, rangeLen, 0) {
 		t.Error("Expected message 0 to be acked")
 	}
-	if !tracker.IsAcked("gen1", startID, endID, 500000) {
+	if !tracker.IsAcked("gen1", startID, rangeLen, 500000) {
 		t.Error("Expected message 500000 to be acked")
 	}
-	if !tracker.IsAcked("gen1", startID, endID, 1000000) {
+	if !tracker.IsAcked("gen1", startID, rangeLen, 1000000) {
 		t.Error("Expected message 1000000 to be acked")
 	}
-	if tracker.IsAcked("gen1", startID, endID, 500001) {
+	if tracker.IsAcked("gen1", startID, rangeLen, 500001) {
 		t.Error("Expected message 500001 to not be acked")
 	}
 }
@@ -269,7 +269,7 @@ func TestTracker_AddRangeTimestamp(t *testing.T) {
 
 	// Add a range with initial timestamp
 	ts1 := time.Now()
-	tracker.AddRange("gen1", 0, 100, ts1)
+	tracker.AddRange("gen1", 0, 101, ts1)
 
 	// Verify range exists
 	tracker.mu.RLock()
@@ -281,7 +281,7 @@ func TestTracker_AddRangeTimestamp(t *testing.T) {
 	}
 
 	gt.mu.RLock()
-	r := gt.findRange(0, 100)
+	r := gt.findRange(0, 101)
 	gt.mu.RUnlock()
 
 	if r == nil {
@@ -295,11 +295,11 @@ func TestTracker_AddRangeTimestamp(t *testing.T) {
 	// Update the same range with a new timestamp
 	time.Sleep(10 * time.Millisecond) // Ensure different timestamp
 	ts2 := time.Now()
-	tracker.AddRange("gen1", 0, 100, ts2)
+	tracker.AddRange("gen1", 0, 101, ts2)
 
 	// Verify timestamp was updated
 	gt.mu.RLock()
-	r = gt.findRange(0, 100)
+	r = gt.findRange(0, 101)
 	gt.mu.RUnlock()
 
 	if r == nil {
@@ -316,7 +316,7 @@ func TestTracker_AddRangeTimestamp(t *testing.T) {
 }
 
 func TestMessageRange_AckCounters(t *testing.T) {
-	mr := NewMessageRange(0, 100)
+	mr := NewMessageRange(0, 101)
 
 	// Initially counters should be zero
 	if mr.AckedCount != 0 {
@@ -373,7 +373,7 @@ func TestMessageRange_AckCounters(t *testing.T) {
 }
 
 func TestMessageRange_UnackedCount(t *testing.T) {
-	mr := NewMessageRange(0, 100)
+	mr := NewMessageRange(0, 101)
 
 	// Total messages: 101 (0-100 inclusive)
 	if mr.TotalMessages() != 101 {
@@ -399,7 +399,7 @@ func TestMessageRange_UnackedCount(t *testing.T) {
 
 	// Ack 10 more messages
 	for i := 0; i < 10; i++ {
-		mr.Ack(int64(i))
+		mr.Ack(uint64(i))
 	}
 	if mr.UnackedCount() != 90 {
 		t.Errorf("Expected UnackedCount to be 90, got %d", mr.UnackedCount())
@@ -407,7 +407,7 @@ func TestMessageRange_UnackedCount(t *testing.T) {
 
 	// Ack all messages
 	for i := 0; i <= 100; i++ {
-		mr.Ack(int64(i))
+		mr.Ack(uint64(i))
 	}
 	if mr.UnackedCount() != 0 {
 		t.Errorf("Expected UnackedCount to be 0, got %d", mr.UnackedCount())
@@ -423,22 +423,22 @@ func TestTracker_UnackedOlderThan(t *testing.T) {
 	recentTime := baseTime.Add(-10 * time.Minute)
 
 	// Add ranges with old timestamp for gen1
-	tracker.AddRange("gen1", 0, 99, oldTime)    // 100 messages
-	tracker.AddRange("gen1", 100, 199, oldTime) // 100 messages
+	tracker.AddRange("gen1", 0, 100, oldTime)   // 100 messages
+	tracker.AddRange("gen1", 100, 100, oldTime) // 100 messages
 
 	// Add range with recent timestamp for gen1
-	tracker.AddRange("gen1", 200, 299, recentTime) // 100 messages
+	tracker.AddRange("gen1", 200, 100, recentTime) // 100 messages
 
 	// Add range with old timestamp for gen2
-	tracker.AddRange("gen2", 0, 49, oldTime) // 50 messages
+	tracker.AddRange("gen2", 0, 50, oldTime) // 50 messages
 
 	// Ack some messages in old ranges
-	tracker.Ack("gen1", 0, 99, 10)
-	tracker.Ack("gen1", 0, 99, 20)
-	tracker.Ack("gen1", 100, 199, 100)
+	tracker.Ack("gen1", 0, 100, 10)
+	tracker.Ack("gen1", 0, 100, 20)
+	tracker.Ack("gen1", 100, 100, 100)
 
 	// Ack some in recent range
-	tracker.Ack("gen1", 200, 299, 250)
+	tracker.Ack("gen1", 200, 100, 250)
 
 	// Query unacked older than recent time (should include old ranges only)
 	unacked := tracker.UnackedOlderThan(recentTime)
@@ -461,8 +461,8 @@ func TestTracker_UnackedOlderThan(t *testing.T) {
 	}
 
 	// Ack all messages in gen2's range
-	for i := int64(0); i <= 49; i++ {
-		tracker.Ack("gen2", 0, 49, i)
+	for i := uint64(0); i <= 49; i++ {
+		tracker.Ack("gen2", 0, 50, i)
 	}
 
 	// Query again - gen2 should not appear
@@ -484,23 +484,23 @@ func TestTracker_UnackedOlderThan_MultipleRanges(t *testing.T) {
 	recent := baseTime.Add(-10 * time.Minute)
 
 	// Add multiple ranges with different timestamps
-	tracker.AddRange("gen1", 0, 9, old1)     // 10 messages
-	tracker.AddRange("gen1", 10, 19, old2)   // 10 messages
-	tracker.AddRange("gen1", 20, 29, recent) // 10 messages
+	tracker.AddRange("gen1", 0, 10, old1)    // 10 messages
+	tracker.AddRange("gen1", 10, 10, old2)   // 10 messages
+	tracker.AddRange("gen1", 20, 10, recent) // 10 messages
 
 	// Ack 5 messages in first range
-	for i := int64(0); i < 5; i++ {
-		tracker.Ack("gen1", 0, 9, i)
+	for i := uint64(0); i < 5; i++ {
+		tracker.Ack("gen1", 0, 10, i)
 	}
 
 	// Ack 3 messages in second range
-	for i := int64(10); i < 13; i++ {
-		tracker.Ack("gen1", 10, 19, i)
+	for i := uint64(10); i < 13; i++ {
+		tracker.Ack("gen1", 10, 10, i)
 	}
 
 	// Ack 2 messages in third range
-	tracker.Ack("gen1", 20, 29, 20)
-	tracker.Ack("gen1", 20, 29, 21)
+	tracker.Ack("gen1", 20, 10, 20)
+	tracker.Ack("gen1", 20, 10, 21)
 
 	// Query with timestamp between old2 and recent
 	queryTime := baseTime.Add(-30 * time.Minute)

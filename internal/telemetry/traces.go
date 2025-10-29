@@ -20,8 +20,8 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	otlpTraceColl "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	otlpCommon "go.opentelemetry.io/proto/otlp/common/v1"
-	otlpTraces "go.opentelemetry.io/proto/otlp/trace/v1"
 	otlpRes "go.opentelemetry.io/proto/otlp/resource/v1"
+	otlpTraces "go.opentelemetry.io/proto/otlp/trace/v1"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -32,31 +32,31 @@ import (
 )
 
 type tracesWorker struct {
-	log            *zap.Logger
-	resourcesPerBatch   int
-	spansPerResource int
-	endpoint       *url.URL
-	useGRPC        bool
-	scope *otlpCommon.InstrumentationScope
-	wg             sync.WaitGroup
-	nextWorkerId  atomic.Uint64
-	stopChan       chan bool
-	client         *http.Client
-	statBytesSent  stats.Stat
-	statBytesSentZ stats.Stat
+	log               *zap.Logger
+	resourcesPerBatch int
+	spansPerResource  int
+	endpoint          *url.URL
+	useGRPC           bool
+	scope             *otlpCommon.InstrumentationScope
+	wg                sync.WaitGroup
+	nextWorkerId      atomic.Uint64
+	stopChan          chan bool
+	client            *http.Client
+	statBytesSent     stats.Stat
+	statBytesSentZ    stats.Stat
 	statBatchesSent   stats.Stat
-	statTracesSent stats.Stat
-	tracesClient   otlpTraceColl.TraceServiceClient
+	statTracesSent    stats.Stat
+	tracesClient      otlpTraceColl.TraceServiceClient
 }
 
 func NewTracesWorker(log *zap.Logger, endpoint *url.URL, useGRPC bool, resourcesPerBatch int, spansPerResource int) worker.Worker {
 	return &tracesWorker{
-		log:            log,
-		useGRPC:        useGRPC,
-		endpoint: endpoint,
-		resourcesPerBatch:   resourcesPerBatch,
-		spansPerResource: spansPerResource,
-		scope: otlp.NewScope(),
+		log:               log,
+		useGRPC:           useGRPC,
+		endpoint:          endpoint,
+		resourcesPerBatch: resourcesPerBatch,
+		spansPerResource:  spansPerResource,
+		scope:             otlp.NewScope(),
 	}
 }
 
@@ -90,7 +90,7 @@ func (o *tracesWorker) Init(statsBuilder stats.Builder, client *http.Client) err
 	return nil
 }
 
-func (o *tracesWorker) Start(pushInterval time.Duration) {
+func (o *tracesWorker) Start(pushInterval time.Duration, msgIdGen *worker.MsgIdGenerator) {
 	pusherIdx := o.nextWorkerId.Add(1)
 	ticker := time.NewTicker(pushInterval)
 
@@ -101,7 +101,7 @@ func (o *tracesWorker) Start(pushInterval time.Duration) {
 			o.wg.Done()
 		}()
 
-		o.pushWait(ticker, pusherIdx)
+		o.pushWait(ticker, pusherIdx, msgIdGen)
 	}()
 }
 
@@ -110,24 +110,26 @@ func (o *tracesWorker) StopAll() {
 	o.wg.Wait()
 }
 
-func (o *tracesWorker) pushWait(ticker *time.Ticker, idx uint64) {
+func (o *tracesWorker) pushWait(ticker *time.Ticker, idx uint64, msgIdGen *worker.MsgIdGenerator) {
 	resources := make([]*otlpRes.Resource, 0)
 	for i := 0; i < o.resourcesPerBatch; i++ {
-		resources = append(resources, otlp.NewResource(idx, i))
+		res := otlp.NewResource(idx, i)
+		res.Attributes = msgIdGen.AddResourceAttrs(res.Attributes)
+		resources = append(resources, res)
 	}
-	
+
 	for {
 		select {
 		case <-o.stopChan:
 			return
 		case <-ticker.C:
-			o.pushIt(idx, resources)
+			o.pushIt(idx, resources, msgIdGen)
 		}
 	}
 }
 
-func (o *tracesWorker) pushIt(idx uint64, resources []*otlpRes.Resource) {
-	batch := o.buildBatch(resources)
+func (o *tracesWorker) pushIt(idx uint64, resources []*otlpRes.Resource, msgIdGen *worker.MsgIdGenerator) {
+	batch := o.buildBatch(resources, msgIdGen)
 
 	if o.useGRPC {
 		o.pushBatchGRPC(idx, batch)
@@ -216,7 +218,7 @@ func (o *tracesWorker) pushBatchHTTP(idx uint64, batch []*otlpTraces.ResourceSpa
 	o.statTracesSent.Incr(uint64(o.spansPerResource))
 }
 
-func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource) []*otlpTraces.ResourceSpans {
+func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource, msgIdGen *worker.MsgIdGenerator) []*otlpTraces.ResourceSpans {
 	spans := make([]*otlpTraces.ResourceSpans, 0, o.resourcesPerBatch)
 
 	for _, res := range resources {
@@ -232,19 +234,19 @@ func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource) []*otlpTraces.R
 			SchemaUrl: semconv.SchemaURL,
 		}
 
-		traceId := util.GenOtelId(16)		
+		traceId := util.GenOtelId(16)
 		nowNano := time.Now().UnixNano()
 
 		for i := 0; i < o.spansPerResource; i++ {
-			startTime := nowNano + int64(i) * int64(10_000_000)
-			
+			startTime := nowNano + int64(i)*int64(10_000_000)
+
 			span := &otlpTraces.Span{
 				TraceId:           traceId,
 				TraceState:        "active",
 				Name:              getSpanName(i),
 				Kind:              otlpTraces.Span_SPAN_KIND_SERVER,
 				StartTimeUnixNano: uint64(startTime),
-				EndTimeUnixNano:   uint64(nowNano + int64(o.spansPerResource) * int64(10_000_000)),
+				EndTimeUnixNano:   uint64(nowNano + int64(o.spansPerResource)*int64(10_000_000)),
 				Attributes: []*otlpCommon.KeyValue{
 					{
 						Key:   "index",
@@ -258,10 +260,11 @@ func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource) []*otlpTraces.R
 				DroppedLinksCount:      0,
 				Status:                 nil,
 			}
-			
+			span.Attributes = msgIdGen.AddElementAttrs(span.Attributes)
+
 			span.SpanId = util.GenOtelId(8)
 			if i > 0 {
-				span.ParentSpanId = rs.ScopeSpans[0].Spans[i - 1].SpanId
+				span.ParentSpanId = rs.ScopeSpans[0].Spans[i-1].SpanId
 			}
 
 			event := &otlpTraces.Span_Event{
@@ -283,19 +286,19 @@ func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource) []*otlpTraces.R
 
 // Common OpenTelemetry span names for realistic telemetry data
 var commonSpanNames = []string{
- "http_request",
- "database_query",
- "cache_get",
- "service_call",
- "file_read",
- "authentication",
- "message_publish",
- "queue_consume",
- "template_render",
- "json_parse",
+	"http_request",
+	"database_query",
+	"cache_get",
+	"service_call",
+	"file_read",
+	"authentication",
+	"message_publish",
+	"queue_consume",
+	"template_render",
+	"json_parse",
 }
 
 // getSpanName returns a span name based on the provided index
 func getSpanName(index int) string {
- return commonSpanNames[index%len(commonSpanNames)]
+	return commonSpanNames[index%len(commonSpanNames)]
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/streamfold/otel-loadgen/internal/telemetry"
 	"github.com/streamfold/otel-loadgen/internal/worker"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // tracesCmd represents the traces command
@@ -36,7 +37,7 @@ func init() {
 }
 
 func runTracesCmd() error {
-	zl, err := zap.NewDevelopment()
+	zl, err := zap.NewDevelopment(zap.IncreaseLevel(zapcore.InfoLevel))
 	if err != nil {
 		return err
 	}
@@ -45,8 +46,18 @@ func runTracesCmd() error {
 	if err != nil {
 		return err
 	}
+	
+	workerCfg := worker.Config{
+		NumWorkers:      numWorkers,
+		ReportInterval:  reportInterval,
+		PushInterval:    pushInterval,
+		ControlEndpoint: controlEndpoint,
+	}
 
-	workers := worker.New(numWorkers, reportInterval, pushInterval, newClient())
+	workers, err := worker.New(workerCfg, zl, newClient())
+	if err != nil {
+		return err
+	}
 
 	traceWorker := telemetry.NewTracesWorker(zl, endpoint, true, otlpResourcesPerBatch, spansPerResource)
 

@@ -11,16 +11,16 @@ type Published struct {
 	Timestamp time.Time `json:"timestamp"`
 
 	// StartID is the first message ID in the range
-	StartID int64 `json:"start_id"`
+	StartID uint64 `json:"start_id"`
 
-	// EndID is the last message ID in the range (inclusive)
-	EndID int64 `json:"end_id"`
+	// RangeLen is the length of the ID range
+	RangeLen uint `json:"range_len"`
 }
 
 // MessageRange tracks a range of message IDs from a generator
 type MessageRange struct {
 	GeneratorID string
-	StartID     int64
-	EndID       int64
+	StartID     uint64
+	RangeLen uint
 	Timestamp   time.Time
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/streamfold/otel-loadgen/internal/msg_tracker"
 	"github.com/streamfold/otel-loadgen/internal/sink"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // sinkCmd represents the sink command
@@ -38,7 +39,7 @@ func init() {
 }
 
 func runSink() error {
-	zl, err := zap.NewDevelopment()
+	zl, err := zap.NewDevelopment(zap.IncreaseLevel(zapcore.InfoLevel))
 	if err != nil {
 		return err
 	}

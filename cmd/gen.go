@@ -31,6 +31,8 @@ var duration time.Duration
 var reportInterval time.Duration
 var pushInterval time.Duration
 
+var controlEndpoint string
+
 var numWorkers int
 
 func init() {
@@ -43,7 +45,9 @@ func init() {
 	genCmd.PersistentFlags().DurationVar(&reportInterval, "report-interval", 3 * time.Second, "Interval to report statistics")
 	genCmd.PersistentFlags().DurationVar(&pushInterval, "push-interval", 50 * time.Millisecond, "Interval between push of batches")
 	
-	genCmd.PersistentFlags().IntVar(&numWorkers, "workers", 1, "How many concurrent workers to run")	
+	genCmd.PersistentFlags().IntVar(&numWorkers, "workers", 1, "How many concurrent workers to run")
+	
+	genCmd.PersistentFlags().StringVar(&controlEndpoint, "control-endpoint", "", "Endpoint of control server")
 }
 
 func defaultTransportDialContext(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
