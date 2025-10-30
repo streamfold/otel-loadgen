@@ -214,14 +214,20 @@ func (t *Tracker) Ack(generatorID string, startRangeID uint64, rangeLen uint, ms
 	}
 
 	// Lock the generator tracker
-	gt.mu.Lock()
+	gt.mu.RLock()
 
 	// Find or create the range
-	r := gt.findRange(startRangeID)
-	if r == nil {
+	r, exists := gt.ranges[startRangeID]
+	if !exists {
+		// Upgrade to write lock
+		gt.mu.RUnlock()
+
+		gt.mu.Lock()
 		r = gt.addRange(startRangeID, rangeLen)
+		gt.mu.Unlock()
+	} else {
+		gt.mu.RUnlock()
 	}
-	gt.mu.Unlock()
 
 	// Ack the message
 	return r.Ack(msgID)
@@ -268,8 +274,8 @@ func (t *Tracker) IsAcked(generatorID string, startRangeID uint64, rangeLen uint
 	gt.mu.RLock()
 	defer gt.mu.RUnlock()
 
-	r := gt.findRange(startRangeID)
-	if r == nil {
+	r, exists := gt.ranges[startRangeID]
+	if !exists {
 		return false
 	}
 
