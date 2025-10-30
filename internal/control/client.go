@@ -16,11 +16,10 @@ import (
 // Client is a client for the control server
 type Client struct {
 	endpointUrl *url.URL
-	log      *zap.Logger
-	msgCh    chan MessageRange
-	stopCh   chan struct{}
-	wg       sync.WaitGroup
-	client   *http.Client
+	log         *zap.Logger
+	msgCh       chan Control
+	wg          sync.WaitGroup
+	client      *http.Client
 }
 
 // NewClient creates a new control server client
@@ -28,23 +27,22 @@ func NewClient(endpoint string, log *zap.Logger) (*Client, error) {
 	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
 		endpoint = fmt.Sprintf("http://%s", endpoint)
 	}
-	
+
 	endpointUrl, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &Client{
 		endpointUrl: endpointUrl,
-		log:      log,
-		msgCh:    make(chan MessageRange, 100),
-		stopCh:   make(chan struct{}),
-		client:   &http.Client{},
+		log:         log,
+		msgCh:       make(chan Control, 100),
+		client:      &http.Client{},
 	}, nil
 }
 
 // MessageChannel returns the channel for sending message ranges
-func (c *Client) MessageChannel() chan<- MessageRange {
+func (c *Client) MessageChannel() chan<- Control {
 	return c.msgCh
 }
 
@@ -58,47 +56,40 @@ func (c *Client) Start() {
 // Stop gracefully stops the client
 func (c *Client) Stop() {
 	c.log.Info("Stopping control client")
-	close(c.stopCh)
-	c.wg.Wait()
 	close(c.msgCh)
+	c.wg.Wait()
 	c.log.Info("Control client stopped")
 }
 
 func (c *Client) processMessages() {
 	defer c.wg.Done()
 
-	for {
-		select {
-		case <-c.stopCh:
-			return
-		case mr, ok := <-c.msgCh:
-			if !ok {
-				return
-			}
-			if err := c.postMessageRange(mr); err != nil {
-				c.log.Error("failed to post message range",
-					zap.Error(err),
-					zap.String("generator_id", mr.GeneratorID),
-					zap.Uint64("start_id", mr.StartID),
-					zap.Uint("range_len", mr.RangeLen),
-				)
-			} else {
-				c.log.Debug("posted message range",
-					zap.String("generator_id", mr.GeneratorID),
-					zap.Uint64("start_id", mr.StartID),
-					zap.Uint("range_len", mr.RangeLen),
-				)
-			}
+	for ctrl := range c.msgCh {
+		mr := ctrl.Range
+		if err := c.postMessageRange(ctrl.Type, mr); err != nil {
+			c.log.Error("failed to post message range",
+				zap.Error(err),
+				zap.String("generator_id", mr.GeneratorID),
+				zap.Uint64("start_id", mr.StartID),
+				zap.Uint("range_len", mr.RangeLen),
+			)
+		} else {
+			c.log.Debug("posted message range",
+				zap.String("generator_id", mr.GeneratorID),
+				zap.Uint64("start_id", mr.StartID),
+				zap.Uint("range_len", mr.RangeLen),
+			)
 		}
+
 	}
 }
 
-func (c *Client) postMessageRange(mr MessageRange) error {
-	pub := Published{
+func (c *Client) postMessageRange(msgType ControlType, mr MessageRange) error {
+	pub := ControlMessage{
 		GeneratorID: mr.GeneratorID,
 		Timestamp:   mr.Timestamp,
 		StartID:     mr.StartID,
-		RangeLen: mr.RangeLen,
+		RangeLen:    mr.RangeLen,
 	}
 
 	data, err := json.Marshal(pub)
@@ -106,8 +97,13 @@ func (c *Client) postMessageRange(mr MessageRange) error {
 		return fmt.Errorf("failed to marshal published message: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/published", c.endpointUrl.String())
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(data))
+	url := fmt.Sprintf("%s/api/message_range", c.endpointUrl.String())
+	method := http.MethodPost
+	if msgType == ControlTypeUpdate {
+		method = http.MethodPut
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), method, url, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}

@@ -12,7 +12,7 @@ const ALLOC_SIZE = 1000
 type MsgIdGenerator struct {
 	generatorId string
 	nextStartId uint64
-	crtlChan    chan<- control.MessageRange
+	ctrlChan    chan<- control.Control
 	currRange   *msgIdRange
 }
 
@@ -29,11 +29,11 @@ type MsgID struct {
 	ID      uint64
 }
 
-func NewMsgIdGenerator(generatorId string, ctrlChan chan<- control.MessageRange) *MsgIdGenerator {
+func NewMsgIdGenerator(generatorId string, ctrlChan chan<- control.Control) *MsgIdGenerator {
 	return &MsgIdGenerator{
 		generatorId: generatorId,
 		nextStartId: 1,
-		crtlChan:    ctrlChan,
+		ctrlChan:    ctrlChan,
 	}
 }
 
@@ -65,6 +65,29 @@ func (g *MsgIdGenerator) AddElementAttrs(attrs []*otlpCommon.KeyValue) []*otlpCo
 	return attrs
 }
 
+func (g *MsgIdGenerator) Start() {
+	
+}
+
+func (g *MsgIdGenerator) Stop() {
+	if g.ctrlChan == nil || g.currRange == nil {
+		return
+	}
+	
+	// Entire range was not used, send update
+	if g.currRange.used < g.currRange.len {
+		g.ctrlChan <- control.Control{
+			Type:  control.ControlTypeUpdate,
+			Range: control.MessageRange{
+				GeneratorID: g.generatorId,
+				StartID:     g.currRange.startId,
+				RangeLen:    g.currRange.used,
+				Timestamp:   g.currRange.timestamp,				
+			},
+		}
+	}
+}
+
 func (g *MsgIdGenerator) nextRange(len uint) *msgIdRange {
 	mid := &msgIdRange{
 		startId:   g.nextStartId,
@@ -75,14 +98,16 @@ func (g *MsgIdGenerator) nextRange(len uint) *msgIdRange {
 
 	g.nextStartId += uint64(len)
 
-	if g.crtlChan != nil {
-		g.crtlChan <- control.MessageRange{
-			GeneratorID: g.generatorId,
-			StartID:     mid.startId,
-			RangeLen:    mid.len,
-			Timestamp:   mid.timestamp,
+	if g.ctrlChan != nil {
+		g.ctrlChan <- control.Control{
+			Type:  control.ControlTypeNew,
+			Range: control.MessageRange{
+				GeneratorID: g.generatorId,
+				StartID:     mid.startId,
+				RangeLen:    mid.len,
+				Timestamp:   mid.timestamp,				
+			},
 		}
-
 	}
 
 	return mid

@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // MessageRange represents a range of message IDs with a bitmask for tracking acknowledgments
@@ -222,12 +224,14 @@ func (gt *generatorTracker) ackedCount() uint {
 // Tracker is the main message tracking service
 type Tracker struct {
 	mu         sync.RWMutex
+	log *zap.Logger
 	generators map[string]*generatorTracker
 }
 
 // NewTracker creates a new message tracker
-func NewTracker() *Tracker {
+func NewTracker(log *zap.Logger) *Tracker {
 	return &Tracker{
+		log: log,
 		generators: make(map[string]*generatorTracker),
 	}
 }
@@ -306,6 +310,32 @@ func (t *Tracker) AddRange(generatorID string, startRangeID uint64, rangeLen uin
 
 	// Add the range with timestamp (or update timestamp if it exists)
 	gt.addRangeWithTimestamp(startRangeID, rangeLen, timestamp)
+}
+
+// UpdateRange is called when the load generator exists before sending the entire range of messages. In this
+// case we need to know that the range is truncated, otherwise messages would be marked as unacked
+func (t *Tracker) UpdateRange(generatorID string, startRangeID uint64, rangeLen uint) {
+	t.mu.RLock()
+	gt, exists := t.generators[generatorID]
+	t.mu.RUnlock()
+
+	if !exists {
+		t.log.Warn("attempt to update a range for unknown generator ID")
+		return
+	}
+	
+	gt.mu.RLock()
+	r, exists := gt.ranges[startRangeID]
+	gt.mu.RUnlock()
+	
+	if !exists {
+		t.log.Warn("attempt to update a range that does not exist")
+		return
+	}
+	
+	r.Lock()
+	defer r.Unlock()
+	r.RangeLen = rangeLen
 }
 
 // IsAcked checks if a message ID has been acknowledged

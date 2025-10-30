@@ -31,7 +31,7 @@ func New(addr string, mt *msg_tracker.Tracker, reportInterval time.Duration, log
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/published", s.handlePublished)
+	mux.HandleFunc("/api/message_range", s.handleMessageRange)
 
 	s.srv = &http.Server{
 		Addr:    addr,
@@ -111,13 +111,13 @@ func (s *Server) Addr() string {
 	return s.addr
 }
 
-func (s *Server) handlePublished(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+func (s *Server) handleMessageRange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var pub Published
+	var pub ControlMessage
 	if err := json.NewDecoder(r.Body).Decode(&pub); err != nil {
 		s.log.Error("failed to decode published notification", zap.Error(err))
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
@@ -133,14 +133,20 @@ func (s *Server) handlePublished(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mt.AddRange(pub.GeneratorID, pub.StartID, pub.RangeLen, pub.Timestamp)
-
 	s.log.Debug("received published notification",
+		zap.String("method", r.Method),
 		zap.String("generator_id", pub.GeneratorID),
 		zap.Uint64("start_id", pub.StartID),
 		zap.Uint("range_len", pub.RangeLen),
 		zap.Time("timestamp", pub.Timestamp),
 	)
+	switch r.Method {
+	case http.MethodPost:
+		s.mt.AddRange(pub.GeneratorID, pub.StartID, pub.RangeLen, pub.Timestamp)
+	case http.MethodPut:
+		// Currently only the range len is updated
+		s.mt.UpdateRange(pub.GeneratorID, pub.StartID, pub.RangeLen)
+	}
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

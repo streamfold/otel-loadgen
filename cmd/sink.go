@@ -48,7 +48,7 @@ func runSink() error {
 		return err
 	}
 
-	mt := msg_tracker.NewTracker()
+	mt := msg_tracker.NewTracker(zl)
 
 	// Start the sink server
 	s, err := sink.New(sinkAddr, mt, zl)

@@ -22,6 +22,7 @@ type Workers struct {
 	statsWg      *sync.WaitGroup
 	client       *http.Client
 	ctrl_client *control.Client
+	msg_id_gens []*MsgIdGenerator
 }
 
 type Config struct {
@@ -47,6 +48,7 @@ func New(cfg Config, log *zap.Logger, client *http.Client) (*Workers, error) {
 		stats:  stats.NewStatTracker(),
 		client: client,
 		ctrl_client: ctrl_client,
+		msg_id_gens: make([]*MsgIdGenerator, 0),
 	}, nil
 }
 
@@ -66,12 +68,15 @@ func (w *Workers) Start() {
 	}
 	for _, worker := range w.workers {
 		for i := 0; i < w.cfg.NumWorkers; i++ {
-			var ctrlChan chan <- control.MessageRange
+			var ctrlChan chan <- control.Control
 			if w.ctrl_client != nil {
 				ctrlChan = w.ctrl_client.MessageChannel()
 			}
+			msg_id := NewMsgIdGenerator(uuid.New().String(), ctrlChan)
+			w.msg_id_gens = append(w.msg_id_gens, msg_id)
+			msg_id.Start()
 			
-			worker.Start(w.cfg.PushInterval, NewMsgIdGenerator(uuid.New().String(), ctrlChan))
+			worker.Start(w.cfg.PushInterval, msg_id)
 		}
 	}
 
@@ -93,6 +98,10 @@ func (w *Workers) Stop() {
 
 	for _, worker := range w.workers {
 		worker.StopAll()
+	}
+	
+	for _, msg_id := range w.msg_id_gens {
+		msg_id.Stop()
 	}
 	
 	if w.ctrl_client != nil {

@@ -2,8 +2,8 @@ package control
 
 import "time"
 
-// Published represents a notification from a generator about messages it has published
-type Published struct {
+// ControlMessage represents a notification from a generator about messages it has published
+type ControlMessage struct {
 	// GeneratorID is the unique identifier of the generator
 	GeneratorID string `json:"generator_id"`
 
@@ -15,6 +15,18 @@ type Published struct {
 
 	// RangeLen is the length of the ID range
 	RangeLen uint `json:"range_len"`
+}
+
+type ControlType int
+const (
+	ControlTypeNew ControlType = iota
+	ControlTypeUpdate
+)
+
+// Control represents a new or updated range
+type Control struct {
+	Type ControlType
+	Range MessageRange
 }
 
 // MessageRange tracks a range of message IDs from a generator
