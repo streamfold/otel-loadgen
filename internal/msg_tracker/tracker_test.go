@@ -4,6 +4,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 func TestMessageRange_NewAndAck(t *testing.T) {
@@ -17,8 +19,12 @@ func TestMessageRange_NewAndAck(t *testing.T) {
 	}
 
 	// Ack a message in range
-	if !mr.Ack(150) {
-		t.Error("Expected Ack(150) to return true")
+	result, success := mr.Ack(150)
+	if !success {
+		t.Error("Expected Ack(150) to return success=true")
+	}
+	if !result.Acked {
+		t.Error("Expected Ack(150) to return Acked=true")
 	}
 
 	if !mr.IsAcked(150) {
@@ -26,11 +32,13 @@ func TestMessageRange_NewAndAck(t *testing.T) {
 	}
 
 	// Ack message at boundaries
-	if !mr.Ack(100) {
-		t.Error("Expected Ack(100) to return true")
+	result, success = mr.Ack(100)
+	if !success || !result.Acked {
+		t.Error("Expected Ack(100) to succeed")
 	}
-	if !mr.Ack(200) {
-		t.Error("Expected Ack(200) to return true")
+	result, success = mr.Ack(200)
+	if !success || !result.Acked {
+		t.Error("Expected Ack(200) to succeed")
 	}
 
 	if !mr.IsAcked(100) {
@@ -45,11 +53,13 @@ func TestMessageRange_OutOfRange(t *testing.T) {
 	mr := NewMessageRange(100, 101) // 101 messages: 100-200 inclusive
 
 	// Ack outside range
-	if mr.Ack(99) {
-		t.Error("Expected Ack(99) to return false")
+	_, success := mr.Ack(99)
+	if success {
+		t.Error("Expected Ack(99) to return success=false")
 	}
-	if mr.Ack(201) {
-		t.Error("Expected Ack(201) to return false")
+	_, success = mr.Ack(201)
+	if success {
+		t.Error("Expected Ack(201) to return success=false")
 	}
 
 	if mr.IsAcked(99) {
@@ -86,7 +96,7 @@ func TestMessageRange_BitmaskStorage(t *testing.T) {
 }
 
 func TestTracker_BasicAck(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	// Ack a message (should create generator and range automatically)
 	if !tracker.Ack("gen1", 0, 101, 50) {
@@ -105,7 +115,7 @@ func TestTracker_BasicAck(t *testing.T) {
 }
 
 func TestTracker_MultipleGenerators(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	// Ack messages for different generators
 	tracker.Ack("gen1", 0, 101, 50)
@@ -128,7 +138,7 @@ func TestTracker_MultipleGenerators(t *testing.T) {
 }
 
 func TestTracker_MultipleRanges(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	// Ack messages in different ranges for same generator
 	tracker.Ack("gen1", 0, 101, 50)
@@ -153,7 +163,7 @@ func TestTracker_MultipleRanges(t *testing.T) {
 }
 
 func TestTracker_AddRange(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	// Add a range without acking
 	ts := time.Now()
@@ -173,7 +183,7 @@ func TestTracker_AddRange(t *testing.T) {
 }
 
 func TestTracker_Concurrency(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	// Test concurrent access
 	var wg sync.WaitGroup
@@ -204,7 +214,7 @@ func TestTracker_Concurrency(t *testing.T) {
 }
 
 func TestTracker_ConcurrentGenerators(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	var wg sync.WaitGroup
 	numGenerators := 50
@@ -236,7 +246,7 @@ func TestTracker_ConcurrentGenerators(t *testing.T) {
 }
 
 func TestTracker_LargeRange(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	// Test with a large range
 	startID := uint64(0)
@@ -265,7 +275,7 @@ func TestTracker_LargeRange(t *testing.T) {
 }
 
 func TestTracker_AddRangeTimestamp(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	// Add a range with initial timestamp
 	ts1 := time.Now()
@@ -415,7 +425,7 @@ func TestMessageRange_UnackedCount(t *testing.T) {
 }
 
 func TestTracker_UnackedOlderThan(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	// Create some ranges with different timestamps
 	baseTime := time.Now()
@@ -441,23 +451,30 @@ func TestTracker_UnackedOlderThan(t *testing.T) {
 	tracker.Ack("gen1", 200, 100, 250)
 
 	// Query unacked older than recent time (should include old ranges only)
-	unacked := tracker.UnackedOlderThan(recentTime)
+	reports := tracker.GeneratorReport(recentTime)
 
 	// gen1 should have: (100 - 2) + (100 - 1) = 98 + 99 = 197 unacked in old ranges
-	if unacked["gen1"] != 197 {
-		t.Errorf("Expected gen1 to have 197 unacked, got %d", unacked["gen1"])
+	if reports["gen1"].Unacked != 197 {
+		t.Errorf("Expected gen1 to have 197 unacked, got %d", reports["gen1"].Unacked)
 	}
 
 	// gen2 should have: 50 - 0 = 50 unacked
-	if unacked["gen2"] != 50 {
-		t.Errorf("Expected gen2 to have 50 unacked, got %d", unacked["gen2"])
+	if reports["gen2"].Unacked != 50 {
+		t.Errorf("Expected gen2 to have 50 unacked, got %d", reports["gen2"].Unacked)
 	}
 
-	// Query with a very old timestamp (should return nothing)
+	// Query with a very old timestamp (should return nothing with unacked)
 	veryOld := baseTime.Add(-2 * time.Hour)
-	unacked = tracker.UnackedOlderThan(veryOld)
-	if len(unacked) != 0 {
-		t.Errorf("Expected no unacked messages older than very old timestamp, got %v", unacked)
+	reports = tracker.GeneratorReport(veryOld)
+	hasUnacked := false
+	for _, report := range reports {
+		if report.Unacked > 0 {
+			hasUnacked = true
+			break
+		}
+	}
+	if hasUnacked {
+		t.Errorf("Expected no unacked messages older than very old timestamp, got %v", reports)
 	}
 
 	// Ack all messages in gen2's range
@@ -465,18 +482,18 @@ func TestTracker_UnackedOlderThan(t *testing.T) {
 		tracker.Ack("gen2", 0, 50, i)
 	}
 
-	// Query again - gen2 should not appear
-	unacked = tracker.UnackedOlderThan(recentTime)
-	if _, exists := unacked["gen2"]; exists {
-		t.Error("Expected gen2 to not appear when all messages are acked")
+	// Query again - gen2 should have 0 unacked
+	reports = tracker.GeneratorReport(recentTime)
+	if reports["gen2"].Unacked != 0 {
+		t.Errorf("Expected gen2 to have 0 unacked when all messages are acked, got %d", reports["gen2"].Unacked)
 	}
-	if unacked["gen1"] != 197 {
-		t.Errorf("Expected gen1 to still have 197 unacked, got %d", unacked["gen1"])
+	if reports["gen1"].Unacked != 197 {
+		t.Errorf("Expected gen1 to still have 197 unacked, got %d", reports["gen1"].Unacked)
 	}
 }
 
 func TestTracker_UnackedOlderThan_MultipleRanges(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	baseTime := time.Now()
 	old1 := baseTime.Add(-2 * time.Hour)
@@ -504,20 +521,20 @@ func TestTracker_UnackedOlderThan_MultipleRanges(t *testing.T) {
 
 	// Query with timestamp between old2 and recent
 	queryTime := baseTime.Add(-30 * time.Minute)
-	unacked := tracker.UnackedOlderThan(queryTime)
+	reports := tracker.GeneratorReport(queryTime)
 
 	// Should include first two ranges: (10 - 5) + (10 - 3) = 5 + 7 = 12
-	if unacked["gen1"] != 12 {
-		t.Errorf("Expected gen1 to have 12 unacked in old ranges, got %d", unacked["gen1"])
+	if reports["gen1"].Unacked != 12 {
+		t.Errorf("Expected gen1 to have 12 unacked in old ranges, got %d", reports["gen1"].Unacked)
 	}
 
 	// Query with timestamp after old1 but before old2
 	queryTime2 := baseTime.Add(-90 * time.Minute)
-	unacked2 := tracker.UnackedOlderThan(queryTime2)
+	reports2 := tracker.GeneratorReport(queryTime2)
 
 	// Should only include first range: 10 - 5 = 5
-	if unacked2["gen1"] != 5 {
-		t.Errorf("Expected gen1 to have 5 unacked, got %d", unacked2["gen1"])
+	if reports2["gen1"].Unacked != 5 {
+		t.Errorf("Expected gen1 to have 5 unacked, got %d", reports2["gen1"].Unacked)
 	}
 }
 
@@ -595,7 +612,7 @@ func TestMessageRange_TotalAckedCount(t *testing.T) {
 }
 
 func TestTracker_AckedCount(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	// Initially empty
 	acked := tracker.AckedCount()
@@ -648,7 +665,7 @@ func TestTracker_AckedCount(t *testing.T) {
 }
 
 func TestTracker_AckedCount_ConcurrentAccess(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	var wg sync.WaitGroup
 	numGoroutines := 50
@@ -712,7 +729,7 @@ func TestMessageRange_ConcurrentTimestampUpdates(t *testing.T) {
 }
 
 func TestTracker_ComplexScenario(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	baseTime := time.Now()
 	oldTime := baseTime.Add(-2 * time.Hour)
@@ -764,42 +781,42 @@ func TestTracker_ComplexScenario(t *testing.T) {
 		t.Errorf("Expected gen3 to have 50 acked, got %d", acked["gen3"])
 	}
 
-	// Test UnackedOlderThan with queryTime between old and recent
+	// Test GeneratorReport with queryTime between old and recent
 	queryTime := baseTime.Add(-1 * time.Hour)
-	unacked := tracker.UnackedOlderThan(queryTime)
+	reports := tracker.GeneratorReport(queryTime)
 
 	// gen1 old ranges: (100 - 30) + (100 - 40) = 70 + 60 = 130
-	if unacked["gen1"] != 130 {
-		t.Errorf("Expected gen1 to have 130 unacked in old ranges, got %d", unacked["gen1"])
+	if reports["gen1"].Unacked != 130 {
+		t.Errorf("Expected gen1 to have 130 unacked in old ranges, got %d", reports["gen1"].Unacked)
 	}
 
 	// gen2: 50 - 10 = 40
-	if unacked["gen2"] != 40 {
-		t.Errorf("Expected gen2 to have 40 unacked, got %d", unacked["gen2"])
+	if reports["gen2"].Unacked != 40 {
+		t.Errorf("Expected gen2 to have 40 unacked, got %d", reports["gen2"].Unacked)
 	}
 
-	// gen3 should not appear (its range is recent)
-	if _, exists := unacked["gen3"]; exists {
-		t.Error("Expected gen3 to not appear in old unacked messages")
+	// gen3 should have 0 unacked (its range is recent)
+	if reports["gen3"].Unacked != 0 {
+		t.Errorf("Expected gen3 to have 0 unacked in old ranges, got %d", reports["gen3"].Unacked)
 	}
 
-	// Test UnackedOlderThan with very recent time (should include all ranges)
+	// Test GeneratorReport with very recent time (should include all ranges)
 	veryRecentTime := baseTime.Add(-1 * time.Minute)
-	unackedAll := tracker.UnackedOlderThan(veryRecentTime)
+	reportsAll := tracker.GeneratorReport(veryRecentTime)
 
 	// gen1: 130 (old) + (100 - 25) (recent) = 130 + 75 = 205
-	if unackedAll["gen1"] != 205 {
-		t.Errorf("Expected gen1 to have 205 total unacked, got %d", unackedAll["gen1"])
+	if reportsAll["gen1"].Unacked != 205 {
+		t.Errorf("Expected gen1 to have 205 total unacked, got %d", reportsAll["gen1"].Unacked)
 	}
 
 	// gen2: 40
-	if unackedAll["gen2"] != 40 {
-		t.Errorf("Expected gen2 to have 40 unacked, got %d", unackedAll["gen2"])
+	if reportsAll["gen2"].Unacked != 40 {
+		t.Errorf("Expected gen2 to have 40 unacked, got %d", reportsAll["gen2"].Unacked)
 	}
 
 	// gen3: 75 - 50 = 25
-	if unackedAll["gen3"] != 25 {
-		t.Errorf("Expected gen3 to have 25 unacked, got %d", unackedAll["gen3"])
+	if reportsAll["gen3"].Unacked != 25 {
+		t.Errorf("Expected gen3 to have 25 unacked, got %d", reportsAll["gen3"].Unacked)
 	}
 }
 
@@ -807,7 +824,8 @@ func TestMessageRange_BoundaryConditions(t *testing.T) {
 	// Test with single message range
 	mr1 := NewMessageRange(100, 1)
 
-	if !mr1.Ack(100) {
+	_, success := mr1.Ack(100)
+	if !success {
 		t.Error("Expected single message to be ackable")
 	}
 
@@ -823,15 +841,18 @@ func TestMessageRange_BoundaryConditions(t *testing.T) {
 	maxStart := uint64(1<<63 - 1000)
 	mr2 := NewMessageRange(maxStart, 100)
 
-	if !mr2.Ack(maxStart) {
+	_, success = mr2.Ack(maxStart)
+	if !success {
 		t.Error("Expected first message in large range to be ackable")
 	}
 
-	if !mr2.Ack(maxStart + 50) {
+	_, success = mr2.Ack(maxStart + 50)
+	if !success {
 		t.Error("Expected middle message in large range to be ackable")
 	}
 
-	if !mr2.Ack(maxStart + 99) {
+	_, success = mr2.Ack(maxStart + 99)
+	if !success {
 		t.Error("Expected last message in large range to be ackable")
 	}
 
@@ -841,7 +862,7 @@ func TestMessageRange_BoundaryConditions(t *testing.T) {
 }
 
 func TestTracker_NonExistentGenerator(t *testing.T) {
-	tracker := NewTracker()
+	tracker := NewTracker(zap.NewNop())
 
 	// Query non-existent generator
 	if tracker.IsAcked("nonexistent", 0, 100, 50) {
@@ -853,8 +874,361 @@ func TestTracker_NonExistentGenerator(t *testing.T) {
 		t.Error("Expected empty acked count for non-existent generator")
 	}
 
-	unacked := tracker.UnackedOlderThan(time.Now())
-	if len(unacked) != 0 {
+	reports := tracker.GeneratorReport(time.Now())
+	if reports["nonexistent"].Unacked != 0 {
 		t.Error("Expected no unacked messages for non-existent generator")
+	}
+}
+
+func TestTracker_UpdateRange_Basic(t *testing.T) {
+	tracker := NewTracker(zap.NewNop())
+
+	// Add a range with 1000 messages
+	tracker.AddRange("gen1", 0, 1000, time.Now())
+
+	// Ack some messages
+	tracker.Ack("gen1", 0, 1000, 100)
+	tracker.Ack("gen1", 0, 1000, 200)
+	tracker.Ack("gen1", 0, 1000, 300)
+
+	// Verify unacked count with original range
+	tracker.mu.RLock()
+	gt := tracker.generators["gen1"]
+	tracker.mu.RUnlock()
+
+	gt.mu.RLock()
+	r := gt.ranges[0]
+	initialUnacked := r.UnackedCount()
+	gt.mu.RUnlock()
+
+	if initialUnacked != 997 { // 1000 - 3 acked
+		t.Errorf("Expected 997 unacked initially, got %d", initialUnacked)
+	}
+
+	// Update range to be smaller (truncated to 500 messages)
+	tracker.UpdateRange("gen1", 0, 500)
+
+	// Verify the range length was updated
+	gt.mu.RLock()
+	r = gt.ranges[0]
+	updatedLen := r.RangeLen
+	updatedUnacked := r.UnackedCount()
+	gt.mu.RUnlock()
+
+	if updatedLen != 500 {
+		t.Errorf("Expected RangeLen to be updated to 500, got %d", updatedLen)
+	}
+
+	if updatedUnacked != 497 { // 500 - 3 acked
+		t.Errorf("Expected 497 unacked after update, got %d", updatedUnacked)
+	}
+
+	// Verify acked messages are still tracked
+	if !tracker.IsAcked("gen1", 0, 500, 100) {
+		t.Error("Expected message 100 to still be acked after range update")
+	}
+	if !tracker.IsAcked("gen1", 0, 500, 200) {
+		t.Error("Expected message 200 to still be acked after range update")
+	}
+	if !tracker.IsAcked("gen1", 0, 500, 300) {
+		t.Error("Expected message 300 to still be acked after range update")
+	}
+
+	// Verify messages beyond new range are no longer valid
+	if tracker.IsAcked("gen1", 0, 500, 600) {
+		t.Error("Expected message 600 to not be acked (beyond updated range)")
+	}
+}
+
+func TestTracker_UpdateRange_IncreaseSize(t *testing.T) {
+	tracker := NewTracker(zap.NewNop())
+
+	// Add a range with 200 messages (large enough for bitmap)
+	tracker.AddRange("gen1", 0, 200, time.Now())
+
+	// Ack some messages
+	tracker.Ack("gen1", 0, 200, 50)
+
+	// Verify initial state
+	tracker.mu.RLock()
+	gt := tracker.generators["gen1"]
+	tracker.mu.RUnlock()
+
+	gt.mu.RLock()
+	r := gt.ranges[0]
+	initialLen := r.RangeLen
+	gt.mu.RUnlock()
+
+	if initialLen != 200 {
+		t.Errorf("Expected initial RangeLen to be 200, got %d", initialLen)
+	}
+
+	// Update range to be smaller first
+	tracker.UpdateRange("gen1", 0, 100)
+
+	// Verify the range length was updated
+	gt.mu.RLock()
+	r = gt.ranges[0]
+	updatedLen := r.RangeLen
+	updatedUnacked := r.UnackedCount()
+	gt.mu.RUnlock()
+
+	if updatedLen != 100 {
+		t.Errorf("Expected RangeLen to be updated to 100, got %d", updatedLen)
+	}
+
+	if updatedUnacked != 99 { // 100 - 1 acked
+		t.Errorf("Expected 99 unacked after truncation, got %d", updatedUnacked)
+	}
+
+	// Update range back to larger (but still within bitmap capacity)
+	tracker.UpdateRange("gen1", 0, 150)
+
+	gt.mu.RLock()
+	r = gt.ranges[0]
+	finalLen := r.RangeLen
+	finalUnacked := r.UnackedCount()
+	gt.mu.RUnlock()
+
+	if finalLen != 150 {
+		t.Errorf("Expected RangeLen to be updated to 150, got %d", finalLen)
+	}
+
+	if finalUnacked != 149 { // 150 - 1 acked
+		t.Errorf("Expected 149 unacked after expansion, got %d", finalUnacked)
+	}
+
+	// Verify previously acked message is still tracked
+	if !tracker.IsAcked("gen1", 0, 150, 50) {
+		t.Error("Expected message 50 to still be acked after range expansion")
+	}
+
+	// Note: We can't test acking messages beyond the original bitmap size
+	// as UpdateRange doesn't expand the bitmap array, only the RangeLen field
+}
+
+func TestTracker_UpdateRange_NonExistentGenerator(t *testing.T) {
+	// Create logger that captures warnings
+	tracker := NewTracker(zap.NewNop())
+
+	// Try to update a range for a generator that doesn't exist
+	// This should not panic and should log a warning
+	tracker.UpdateRange("nonexistent", 0, 100)
+
+	// Verify generator was not created
+	tracker.mu.RLock()
+	_, exists := tracker.generators["nonexistent"]
+	tracker.mu.RUnlock()
+
+	if exists {
+		t.Error("Expected UpdateRange to not create a new generator")
+	}
+}
+
+func TestTracker_UpdateRange_NonExistentRange(t *testing.T) {
+	tracker := NewTracker(zap.NewNop())
+
+	// Add a generator with a range
+	tracker.AddRange("gen1", 0, 100, time.Now())
+
+	// Try to update a range that doesn't exist for this generator
+	// This should not panic and should log a warning
+	tracker.UpdateRange("gen1", 1000, 50)
+
+	// Verify the original range was not affected
+	tracker.mu.RLock()
+	gt := tracker.generators["gen1"]
+	tracker.mu.RUnlock()
+
+	gt.mu.RLock()
+	r := gt.ranges[0]
+	originalLen := r.RangeLen
+	gt.mu.RUnlock()
+
+	if originalLen != 100 {
+		t.Errorf("Expected original range to remain unchanged with RangeLen 100, got %d", originalLen)
+	}
+
+	// Verify the non-existent range was not created
+	gt.mu.RLock()
+	_, exists := gt.ranges[1000]
+	gt.mu.RUnlock()
+
+	if exists {
+		t.Error("Expected UpdateRange to not create a new range")
+	}
+}
+
+func TestTracker_UpdateRange_WithAckedMessages(t *testing.T) {
+	tracker := NewTracker(zap.NewNop())
+
+	// Add a range
+	tracker.AddRange("gen1", 0, 1000, time.Now())
+
+	// Ack messages throughout the range
+	for i := uint64(0); i < 100; i++ {
+		tracker.Ack("gen1", 0, 1000, i*10)
+	}
+
+	// Verify initial acked count
+	acked := tracker.AckedCount()
+	if acked["gen1"] != 100 {
+		t.Errorf("Expected 100 acked messages, got %d", acked["gen1"])
+	}
+
+	// Update range to be much smaller (only includes first 500 messages)
+	tracker.UpdateRange("gen1", 0, 500)
+
+	// Verify acked count remains the same (acked messages don't change)
+	acked = tracker.AckedCount()
+	if acked["gen1"] != 100 {
+		t.Errorf("Expected 100 acked messages after range update, got %d", acked["gen1"])
+	}
+
+	// Verify messages within new range are still acked
+	if !tracker.IsAcked("gen1", 0, 500, 0) {
+		t.Error("Expected message 0 to still be acked")
+	}
+	if !tracker.IsAcked("gen1", 0, 500, 100) {
+		t.Error("Expected message 100 to still be acked")
+	}
+	if !tracker.IsAcked("gen1", 0, 500, 490) {
+		t.Error("Expected message 490 to still be acked")
+	}
+
+	// Messages beyond new range should not be queryable with new range length
+	// Note: IsAcked checks if msgID is in range, so 600 is out of range for length 500
+	if tracker.IsAcked("gen1", 0, 500, 600) {
+		t.Error("Expected message 600 to be out of range")
+	}
+}
+
+func TestTracker_UpdateRange_ConcurrentAccess(t *testing.T) {
+	tracker := NewTracker(zap.NewNop())
+
+	// Add a range
+	tracker.AddRange("gen1", 0, 10000, time.Now())
+
+	var wg sync.WaitGroup
+	numGoroutines := 50
+
+	// Concurrently update range and ack messages
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			if id%2 == 0 {
+				// Half the goroutines ack messages
+				for j := 0; j < 10; j++ {
+					msgID := uint64(id*10 + j)
+					tracker.Ack("gen1", 0, 10000, msgID)
+				}
+			} else {
+				// Other half update the range
+				newLen := uint(5000 + id*10)
+				tracker.UpdateRange("gen1", 0, newLen)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify tracker is still in a consistent state
+	acked := tracker.AckedCount()
+	if acked["gen1"] == 0 {
+		t.Error("Expected some messages to be acked after concurrent operations")
+	}
+
+	// Verify we can still query the tracker
+	tracker.mu.RLock()
+	gt := tracker.generators["gen1"]
+	tracker.mu.RUnlock()
+
+	if gt == nil {
+		t.Fatal("Expected generator to exist after concurrent operations")
+	}
+
+	gt.mu.RLock()
+	r := gt.ranges[0]
+	gt.mu.RUnlock()
+
+	if r == nil {
+		t.Fatal("Expected range to exist after concurrent operations")
+	}
+
+	// The final range length should be one of the values set
+	if r.RangeLen < 5000 || r.RangeLen > 6000 {
+		t.Errorf("Expected RangeLen to be between 5000-6000, got %d", r.RangeLen)
+	}
+}
+
+func TestTracker_UpdateRange_MultipleRanges(t *testing.T) {
+	tracker := NewTracker(zap.NewNop())
+
+	// Add multiple ranges for the same generator
+	tracker.AddRange("gen1", 0, 1000, time.Now())
+	tracker.AddRange("gen1", 1000, 1000, time.Now())
+	tracker.AddRange("gen1", 2000, 1000, time.Now())
+
+	// Update only the second range
+	tracker.UpdateRange("gen1", 1000, 500)
+
+	// Verify first range is unchanged
+	tracker.mu.RLock()
+	gt := tracker.generators["gen1"]
+	tracker.mu.RUnlock()
+
+	gt.mu.RLock()
+	r0 := gt.ranges[0]
+	r1 := gt.ranges[1000]
+	r2 := gt.ranges[2000]
+	gt.mu.RUnlock()
+
+	if r0.RangeLen != 1000 {
+		t.Errorf("Expected first range to have RangeLen 1000, got %d", r0.RangeLen)
+	}
+
+	if r1.RangeLen != 500 {
+		t.Errorf("Expected second range to have RangeLen 500, got %d", r1.RangeLen)
+	}
+
+	if r2.RangeLen != 1000 {
+		t.Errorf("Expected third range to have RangeLen 1000, got %d", r2.RangeLen)
+	}
+}
+
+func TestTracker_UpdateRange_AffectsUnackedCount(t *testing.T) {
+	tracker := NewTracker(zap.NewNop())
+
+	baseTime := time.Now()
+	oldTime := baseTime.Add(-1 * time.Hour)
+
+	// Add a range with old timestamp
+	tracker.AddRange("gen1", 0, 1000, oldTime)
+
+	// Ack 100 messages
+	for i := uint64(0); i < 100; i++ {
+		tracker.Ack("gen1", 0, 1000, i)
+	}
+
+	// Check unacked count before update
+	reports := tracker.GeneratorReport(baseTime)
+	if reports["gen1"].Unacked != 900 { // 1000 - 100
+		t.Errorf("Expected 900 unacked before update, got %d", reports["gen1"].Unacked)
+	}
+
+	// Update range to be smaller (200 messages)
+	tracker.UpdateRange("gen1", 0, 200)
+
+	// Check unacked count after update
+	reports = tracker.GeneratorReport(baseTime)
+	if reports["gen1"].Unacked != 100 { // 200 - 100
+		t.Errorf("Expected 100 unacked after update, got %d", reports["gen1"].Unacked)
+	}
+
+	// Verify TotalAcked remains the same
+	if reports["gen1"].TotalAcked != 100 {
+		t.Errorf("Expected TotalAcked to remain 100, got %d", reports["gen1"].TotalAcked)
 	}
 }
