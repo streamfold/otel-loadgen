@@ -3,6 +3,7 @@ package msg_tracker
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,6 +16,14 @@ type MessageRange struct {
 	AckedCount     uint     // Number of unique messages acked
 	DuplicateCount uint     // Number of duplicate acks received
 	bitmap         []uint64 // Each uint64 holds 64 bits
+}
+
+// Per-generator report
+type GeneratorReport struct {
+	Unacked          uint
+	TotalAcked       uint
+	TotalDuped       uint
+	OldestUnackedAge time.Time
 }
 
 // NewMessageRange creates a new message range
@@ -32,15 +41,24 @@ func NewMessageRange(startID uint64, rangeLen uint) *MessageRange {
 	}
 }
 
+type AckedResult struct {
+	// Maybe should be an enum?
+	Dup   bool
+	Acked bool
+}
+
 // Ack marks a message ID as acknowledged
 // Returns true if the message was in range, false otherwise
-func (mr *MessageRange) Ack(msgID uint64) bool {
+
+func (mr *MessageRange) Ack(msgID uint64) (AckedResult, bool) {
+	var result AckedResult
+
 	mr.Lock()
 	defer mr.Unlock()
 
 	if !mr.contains(msgID) {
 		fmt.Printf("does not contain msgID: %d\n", msgID)
-		return false
+		return result, false
 	}
 
 	offset := msgID - mr.StartID
@@ -56,11 +74,13 @@ func (mr *MessageRange) Ack(msgID uint64) bool {
 	// Update counters
 	if wasAlreadyAcked {
 		mr.DuplicateCount++
+		result.Dup = true
 	} else {
 		mr.AckedCount++
+		result.Acked = true
 	}
 
-	return true
+	return result, true
 }
 
 // IsAcked checks if a message ID has been acknowledged
@@ -105,6 +125,13 @@ func (mr *MessageRange) UnackedCount() uint {
 	return mr.TotalMessages() - mr.AckedCount
 }
 
+func (mr *MessageRange) GetTimestamp() time.Time {
+	mr.RLock()
+	defer mr.RUnlock()
+
+	return mr.Timestamp
+}
+
 func (mr *MessageRange) UpdateTimestamp(timestamp time.Time) {
 	mr.Lock()
 	defer mr.Unlock()
@@ -121,8 +148,10 @@ func (mr *MessageRange) OlderThan(timestamp time.Time) bool {
 
 // generatorTracker holds all ranges for a specific generator ID
 type generatorTracker struct {
-	mu     sync.RWMutex
-	ranges map[uint64]*MessageRange // Key is startID, we assume ranges are unique
+	mu         sync.RWMutex
+	totalAcked atomic.Uint64
+	totalDuped atomic.Uint64
+	ranges     map[uint64]*MessageRange // Key is startID, we assume ranges are unique
 }
 
 func newGeneratorTracker() *generatorTracker {
@@ -161,16 +190,25 @@ func (gt *generatorTracker) addRangeWithTimestamp(startID uint64, rangeLen uint,
 	return r
 }
 
-// unackedOlderThan returns the total number of unacked messages in ranges older than the given timestamp
-func (gt *generatorTracker) unackedOlderThan(timestamp time.Time) uint {
+// unackedOlderThan returns the total number of unacked messages in ranges older than the given timestamp and the oldest timestamp
+func (gt *generatorTracker) unackedOlderThan(timestamp time.Time) (uint, time.Time) {
 	var total uint
+	var oldestTime time.Time
 	for _, r := range gt.ranges {
 		// Only count ranges with a timestamp before the given timestamp
 		if r.OlderThan(timestamp) {
-			total += r.UnackedCount()
+			unacked := r.UnackedCount()
+			if unacked > 0 {
+				ts := r.GetTimestamp()
+				if oldestTime.IsZero() || ts.Before(oldestTime) {
+					oldestTime = r.GetTimestamp()
+				}
+			}
+
+			total += unacked
 		}
 	}
-	return total
+	return total, oldestTime
 }
 
 func (gt *generatorTracker) ackedCount() uint {
@@ -230,7 +268,16 @@ func (t *Tracker) Ack(generatorID string, startRangeID uint64, rangeLen uint, ms
 	}
 
 	// Ack the message
-	return r.Ack(msgID)
+	result, success := r.Ack(msgID)
+	if success {
+		if result.Dup {
+			gt.totalDuped.Add(1)
+		} else if result.Acked {
+			gt.totalAcked.Add(1)
+		}
+	}
+
+	return success
 }
 
 // AddRange adds a message range for a generator without acking any messages
@@ -304,19 +351,22 @@ func (t *Tracker) AckedCount() map[string]uint {
 // UnackedOlderThan returns a map of generator ID to the total number of unacked messages
 // for ranges that have a timestamp before the given timestamp.
 // Only includes generators that have unacked messages older than the timestamp.
-func (t *Tracker) UnackedOlderThan(timestamp time.Time) map[string]uint {
-	result := make(map[string]uint)
+func (t *Tracker) GeneratorReport(timestamp time.Time) map[string]GeneratorReport {
+	result := make(map[string]GeneratorReport)
 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
 	for generatorID, gt := range t.generators {
 		gt.mu.RLock()
-		unacked := gt.unackedOlderThan(timestamp)
+		unacked, oldestTime := gt.unackedOlderThan(timestamp)
 		gt.mu.RUnlock()
 
-		if unacked > 0 {
-			result[generatorID] = unacked
+		result[generatorID] = GeneratorReport{
+			Unacked:          unacked,
+			TotalAcked:       uint(gt.totalAcked.Load()),
+			TotalDuped:       uint(gt.totalDuped.Load()),
+			OldestUnackedAge: oldestTime,
 		}
 	}
 

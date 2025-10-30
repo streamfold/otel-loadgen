@@ -49,22 +49,22 @@ func (s *Server) Start() error {
 			s.log.Error("control server error", zap.Error(err))
 		}
 	}()
-	
+
 	s.reportStop = make(chan bool)
 	s.reportWg = &sync.WaitGroup{}
 	s.reportWg.Add(1)
-	
+
 	go func() {
 		defer s.reportWg.Done()
-		
+
 		tm := time.NewTicker(s.reportInterval)
 		for {
 			select {
-				case <-tm.C:
-					s.report()
-				case <-s.reportStop:
-					tm.Stop()
-					return
+			case <-tm.C:
+				s.report()
+			case <-s.reportStop:
+				tm.Stop()
+				return
 			}
 		}
 	}()
@@ -73,25 +73,29 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) report() {
-	var sb strings.Builder
-	
-	defer func() {
-		fmt.Printf("REPORT: %s\n", sb.String())
-	}()
-	
-	unacked := s.mt.UnackedOlderThan(time.Now().Add(-1 * s.reportInterval))
-	if len(unacked) == 0 {
-		sb.WriteString("All messages acked")
+	reports := s.mt.GeneratorReport(time.Now().Add(-1 * s.reportInterval))
+	if len(reports) == 0 {
+		fmt.Printf("REPORT: No load generators running\n")
 		return
 	}
-	acked := s.mt.AckedCount()
-	
-	for genID, count := range unacked {
-		sb.WriteString(fmt.Sprintf("Generator %s, unacked: %d", genID, count))
-		genAcked, exists := acked[genID]
-		if exists {
-			sb.WriteString(fmt.Sprintf(", acked: %d", genAcked))
-		}
+
+	fmt.Printf("REPORT [%s]:\n", time.Now().Format(time.RFC3339))
+	for genID, report := range reports {
+		s.reportGenerator(genID, report)
+	}
+}
+
+func (s *Server) reportGenerator(genID string, report msg_tracker.GeneratorReport) {
+	var sb strings.Builder
+
+	defer func() {
+		fmt.Printf("\t%s\n", sb.String())
+	}()
+
+	sb.WriteString(fmt.Sprintf("Generator %s:\tTotal Acked: %d,\tTotal Duped: %d", genID, report.TotalAcked, report.TotalDuped))
+
+	if report.Unacked > 0 {
+		sb.WriteString(fmt.Sprintf(",\tUnacked: %d, Age: %s", report.Unacked, time.Since(report.OldestUnackedAge).String()))
 	}
 }
 
