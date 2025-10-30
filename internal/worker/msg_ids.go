@@ -117,8 +117,13 @@ func (r *msgIdRange) nextId() MsgID {
 
 func ExtractGeneratorId(attrs []*otlpCommon.KeyValue) string {
 	for _, attr := range attrs {
-		if attr.Key == RES_ATTR_GENERATOR_ID {
-			return attr.Value.String()
+		if attr.Key == RES_ATTR_GENERATOR_ID && attr.Value != nil {
+			switch v := attr.Value.GetValue().(type) {
+			case *otlpCommon.AnyValue_StringValue:
+				return v.StringValue
+			default:
+				return ""
+			}
 		}
 	}
 
