@@ -20,7 +20,7 @@ type MessageRange struct {
 	bitmap         []uint64 // Each uint64 holds 64 bits
 }
 
-// Per-generator report
+// GeneratorReport contains statistics for a single generator
 type GeneratorReport struct {
 	Unacked          uint
 	TotalAcked       uint
@@ -50,8 +50,7 @@ type AckedResult struct {
 }
 
 // Ack marks a message ID as acknowledged
-// Returns true if the message was in range, false otherwise
-
+// Returns (AckedResult, success) where success indicates if the message was in range
 func (mr *MessageRange) Ack(msgID uint64) (AckedResult, bool) {
 	var result AckedResult
 
@@ -101,14 +100,16 @@ func (mr *MessageRange) IsAcked(msgID uint64) bool {
 	return (mr.bitmap[idx] & (1 << bit)) != 0
 }
 
-// Contains checks if the range contains the given message ID
+// contains checks if the range contains the given message ID (internal helper)
 func (mr *MessageRange) contains(msgID uint64) bool {
 	return msgID >= mr.StartID && msgID < mr.StartID+uint64(mr.RangeLen)
 }
 
 // TotalMessages returns the total number of messages in the range
 func (mr *MessageRange) TotalMessages() uint {
-	// This field is static
+	mr.RLock()
+	defer mr.RUnlock()
+
 	return mr.RangeLen
 }
 
@@ -141,6 +142,15 @@ func (mr *MessageRange) UpdateTimestamp(timestamp time.Time) {
 	mr.Timestamp = timestamp
 }
 
+// Update the length of the message range, this won't resize the
+// bitmap however
+func (mr *MessageRange) UpdateRangeLen(rangeLen uint) {
+	mr.Lock()
+	defer mr.Unlock()
+
+	mr.RangeLen = rangeLen
+}
+
 func (mr *MessageRange) OlderThan(timestamp time.Time) bool {
 	mr.RLock()
 	defer mr.RUnlock()
@@ -167,7 +177,7 @@ func (gt *generatorTracker) findRange(startRangeID uint64) *MessageRange {
 	return gt.ranges[startRangeID]
 }
 
-// addRange adds or returns existing range
+// addRange adds a new range or returns the existing range if it already exists
 func (gt *generatorTracker) addRange(startID uint64, rangeLen uint) *MessageRange {
 	if r, exists := gt.ranges[startID]; exists {
 		return r
@@ -224,14 +234,14 @@ func (gt *generatorTracker) ackedCount() uint {
 // Tracker is the main message tracking service
 type Tracker struct {
 	mu         sync.RWMutex
-	log *zap.Logger
+	log        *zap.Logger
 	generators map[string]*generatorTracker
 }
 
 // NewTracker creates a new message tracker
 func NewTracker(log *zap.Logger) *Tracker {
 	return &Tracker{
-		log: log,
+		log:        log,
 		generators: make(map[string]*generatorTracker),
 	}
 }
@@ -312,8 +322,10 @@ func (t *Tracker) AddRange(generatorID string, startRangeID uint64, rangeLen uin
 	gt.addRangeWithTimestamp(startRangeID, rangeLen, timestamp)
 }
 
-// UpdateRange is called when the load generator exists before sending the entire range of messages. In this
-// case we need to know that the range is truncated, otherwise messages would be marked as unacked
+// UpdateRange updates the length of an existing message range. This is typically called when
+// a load generator exits before sending the entire range of messages. By updating the range
+// length, we ensure that unsent messages are not counted as unacked.
+// Note: This only updates RangeLen; the bitmap is not resized.
 func (t *Tracker) UpdateRange(generatorID string, startRangeID uint64, rangeLen uint) {
 	t.mu.RLock()
 	gt, exists := t.generators[generatorID]
@@ -323,23 +335,22 @@ func (t *Tracker) UpdateRange(generatorID string, startRangeID uint64, rangeLen 
 		t.log.Warn("attempt to update a range for unknown generator ID")
 		return
 	}
-	
+
 	gt.mu.RLock()
 	r, exists := gt.ranges[startRangeID]
 	gt.mu.RUnlock()
-	
+
 	if !exists {
 		t.log.Warn("attempt to update a range that does not exist")
 		return
 	}
-	
-	r.Lock()
-	defer r.Unlock()
-	r.RangeLen = rangeLen
+
+	r.UpdateRangeLen(rangeLen)
 }
 
-// IsAcked checks if a message ID has been acknowledged
-func (t *Tracker) IsAcked(generatorID string, startRangeID uint64, rangeLen uint, msgID uint64) bool {
+// isAcked checks if a message ID has been acknowledged
+// Only called from tests
+func (t *Tracker) isAcked(generatorID string, startRangeID uint64, rangeLen uint, msgID uint64) bool {
 	t.mu.RLock()
 	gt, exists := t.generators[generatorID]
 	t.mu.RUnlock()
@@ -359,7 +370,8 @@ func (t *Tracker) IsAcked(generatorID string, startRangeID uint64, rangeLen uint
 	return r.IsAcked(msgID)
 }
 
-func (t *Tracker) AckedCount() map[string]uint {
+// only called from tests
+func (t *Tracker) ackedCount() map[string]uint {
 	result := make(map[string]uint)
 
 	t.mu.RLock()
@@ -378,9 +390,9 @@ func (t *Tracker) AckedCount() map[string]uint {
 	return result
 }
 
-// UnackedOlderThan returns a map of generator ID to the total number of unacked messages
-// for ranges that have a timestamp before the given timestamp.
-// Only includes generators that have unacked messages older than the timestamp.
+// GeneratorReport returns a report for each generator containing statistics about
+// unacked messages, total acked messages, duplicates, and the oldest unacked timestamp.
+// The unacked count only includes ranges with timestamps before the given timestamp.
 func (t *Tracker) GeneratorReport(timestamp time.Time) map[string]GeneratorReport {
 	result := make(map[string]GeneratorReport)
 

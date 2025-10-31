@@ -104,12 +104,12 @@ func TestTracker_BasicAck(t *testing.T) {
 	}
 
 	// Verify it's acked
-	if !tracker.IsAcked("gen1", 0, 101, 50) {
+	if !tracker.isAcked("gen1", 0, 101, 50) {
 		t.Error("Expected message 50 to be acked")
 	}
 
 	// Verify other messages aren't acked
-	if tracker.IsAcked("gen1", 0, 101, 51) {
+	if tracker.isAcked("gen1", 0, 101, 51) {
 		t.Error("Expected message 51 to not be acked")
 	}
 }
@@ -123,16 +123,16 @@ func TestTracker_MultipleGenerators(t *testing.T) {
 	tracker.Ack("gen1", 0, 101, 75)
 
 	// Verify isolation between generators
-	if !tracker.IsAcked("gen1", 0, 101, 50) {
+	if !tracker.isAcked("gen1", 0, 101, 50) {
 		t.Error("Expected gen1 message 50 to be acked")
 	}
-	if !tracker.IsAcked("gen1", 0, 101, 75) {
+	if !tracker.isAcked("gen1", 0, 101, 75) {
 		t.Error("Expected gen1 message 75 to be acked")
 	}
-	if !tracker.IsAcked("gen2", 0, 101, 50) {
+	if !tracker.isAcked("gen2", 0, 101, 50) {
 		t.Error("Expected gen2 message 50 to be acked")
 	}
-	if tracker.IsAcked("gen2", 0, 101, 75) {
+	if tracker.isAcked("gen2", 0, 101, 75) {
 		t.Error("Expected gen2 message 75 to not be acked")
 	}
 }
@@ -146,18 +146,18 @@ func TestTracker_MultipleRanges(t *testing.T) {
 	tracker.Ack("gen1", 0, 101, 75)
 
 	// Verify both ranges work correctly
-	if !tracker.IsAcked("gen1", 0, 101, 50) {
+	if !tracker.isAcked("gen1", 0, 101, 50) {
 		t.Error("Expected message 50 in range 0-100 to be acked")
 	}
-	if !tracker.IsAcked("gen1", 0, 101, 75) {
+	if !tracker.isAcked("gen1", 0, 101, 75) {
 		t.Error("Expected message 75 in range 0-100 to be acked")
 	}
-	if !tracker.IsAcked("gen1", 101, 100, 150) {
+	if !tracker.isAcked("gen1", 101, 100, 150) {
 		t.Error("Expected message 150 in range 101-200 to be acked")
 	}
 
 	// Verify ranges are isolated
-	if tracker.IsAcked("gen1", 101, 100, 50) {
+	if tracker.isAcked("gen1", 101, 100, 50) {
 		t.Error("Expected message 50 in range 101-200 to not be acked")
 	}
 }
@@ -170,14 +170,14 @@ func TestTracker_AddRange(t *testing.T) {
 	tracker.AddRange("gen1", 0, 101, ts)
 
 	// Verify range exists but no messages are acked
-	if tracker.IsAcked("gen1", 0, 101, 50) {
+	if tracker.isAcked("gen1", 0, 101, 50) {
 		t.Error("Expected no messages to be acked after AddRange")
 	}
 
 	// Now ack a message in the range
 	tracker.Ack("gen1", 0, 101, 50)
 
-	if !tracker.IsAcked("gen1", 0, 101, 50) {
+	if !tracker.isAcked("gen1", 0, 101, 50) {
 		t.Error("Expected message 50 to be acked")
 	}
 }
@@ -206,7 +206,7 @@ func TestTracker_Concurrency(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		for j := 0; j < numMessages; j++ {
 			msgID := uint64(i*numMessages + j)
-			if !tracker.IsAcked("gen1", 0, 10001, msgID) {
+			if !tracker.isAcked("gen1", 0, 10001, msgID) {
 				t.Errorf("Expected message %d to be acked", msgID)
 			}
 		}
@@ -238,7 +238,7 @@ func TestTracker_ConcurrentGenerators(t *testing.T) {
 	for i := 0; i < numGenerators; i++ {
 		genID := string(rune('A' + i))
 		for j := 0; j < numMessages; j++ {
-			if !tracker.IsAcked(genID, 0, 1001, uint64(j)) {
+			if !tracker.isAcked(genID, 0, 1001, uint64(j)) {
 				t.Errorf("Expected message %d for generator %s to be acked", j, genID)
 			}
 		}
@@ -260,16 +260,16 @@ func TestTracker_LargeRange(t *testing.T) {
 	tracker.Ack("gen1", startID, rangeLen, 1000000)
 
 	// Verify
-	if !tracker.IsAcked("gen1", startID, rangeLen, 0) {
+	if !tracker.isAcked("gen1", startID, rangeLen, 0) {
 		t.Error("Expected message 0 to be acked")
 	}
-	if !tracker.IsAcked("gen1", startID, rangeLen, 500000) {
+	if !tracker.isAcked("gen1", startID, rangeLen, 500000) {
 		t.Error("Expected message 500000 to be acked")
 	}
-	if !tracker.IsAcked("gen1", startID, rangeLen, 1000000) {
+	if !tracker.isAcked("gen1", startID, rangeLen, 1000000) {
 		t.Error("Expected message 1000000 to be acked")
 	}
-	if tracker.IsAcked("gen1", startID, rangeLen, 500001) {
+	if tracker.isAcked("gen1", startID, rangeLen, 500001) {
 		t.Error("Expected message 500001 to not be acked")
 	}
 }
@@ -563,7 +563,7 @@ func TestTracker_ComplexScenario(t *testing.T) {
 	}
 
 	// Test AckedCount
-	acked := tracker.AckedCount()
+	acked := tracker.ackedCount()
 	if acked["gen1"] != 95 { // 30 + 40 + 25
 		t.Errorf("Expected gen1 to have 95 acked, got %d", acked["gen1"])
 	}
@@ -658,11 +658,11 @@ func TestTracker_NonExistentGenerator(t *testing.T) {
 	tracker := NewTracker(zap.NewNop())
 
 	// Query non-existent generator
-	if tracker.IsAcked("nonexistent", 0, 100, 50) {
+	if tracker.isAcked("nonexistent", 0, 100, 50) {
 		t.Error("Expected non-existent generator to have no acked messages")
 	}
 
-	acked := tracker.AckedCount()
+	acked := tracker.ackedCount()
 	if len(acked) != 0 {
 		t.Error("Expected empty acked count for non-existent generator")
 	}
@@ -717,18 +717,18 @@ func TestTracker_UpdateRange_Basic(t *testing.T) {
 	}
 
 	// Verify acked messages are still tracked
-	if !tracker.IsAcked("gen1", 0, 500, 100) {
+	if !tracker.isAcked("gen1", 0, 500, 100) {
 		t.Error("Expected message 100 to still be acked after range update")
 	}
-	if !tracker.IsAcked("gen1", 0, 500, 200) {
+	if !tracker.isAcked("gen1", 0, 500, 200) {
 		t.Error("Expected message 200 to still be acked after range update")
 	}
-	if !tracker.IsAcked("gen1", 0, 500, 300) {
+	if !tracker.isAcked("gen1", 0, 500, 300) {
 		t.Error("Expected message 300 to still be acked after range update")
 	}
 
 	// Verify messages beyond new range are no longer valid
-	if tracker.IsAcked("gen1", 0, 500, 600) {
+	if tracker.isAcked("gen1", 0, 500, 600) {
 		t.Error("Expected message 600 to not be acked (beyond updated range)")
 	}
 }
@@ -745,7 +745,7 @@ func TestTracker_UpdateRange_WithAckedMessages(t *testing.T) {
 	}
 
 	// Verify initial acked count
-	acked := tracker.AckedCount()
+	acked := tracker.ackedCount()
 	if acked["gen1"] != 100 {
 		t.Errorf("Expected 100 acked messages, got %d", acked["gen1"])
 	}
@@ -754,25 +754,25 @@ func TestTracker_UpdateRange_WithAckedMessages(t *testing.T) {
 	tracker.UpdateRange("gen1", 0, 500)
 
 	// Verify acked count remains the same (acked messages don't change)
-	acked = tracker.AckedCount()
+	acked = tracker.ackedCount()
 	if acked["gen1"] != 100 {
 		t.Errorf("Expected 100 acked messages after range update, got %d", acked["gen1"])
 	}
 
 	// Verify messages within new range are still acked
-	if !tracker.IsAcked("gen1", 0, 500, 0) {
+	if !tracker.isAcked("gen1", 0, 500, 0) {
 		t.Error("Expected message 0 to still be acked")
 	}
-	if !tracker.IsAcked("gen1", 0, 500, 100) {
+	if !tracker.isAcked("gen1", 0, 500, 100) {
 		t.Error("Expected message 100 to still be acked")
 	}
-	if !tracker.IsAcked("gen1", 0, 500, 490) {
+	if !tracker.isAcked("gen1", 0, 500, 490) {
 		t.Error("Expected message 490 to still be acked")
 	}
 
 	// Messages beyond new range should not be queryable with new range length
 	// Note: IsAcked checks if msgID is in range, so 600 is out of range for length 500
-	if tracker.IsAcked("gen1", 0, 500, 600) {
+	if tracker.isAcked("gen1", 0, 500, 600) {
 		t.Error("Expected message 600 to be out of range")
 	}
 }
