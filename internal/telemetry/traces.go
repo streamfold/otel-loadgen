@@ -221,52 +221,53 @@ func (o *tracesWorker) pushBatchHTTP(idx uint64, batch []*otlpTraces.ResourceSpa
 }
 
 func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource, msgIdGen worker.MsgIdGenerator) []*otlpTraces.ResourceSpans {
-	spans := make([]*otlpTraces.ResourceSpans, 0, o.resourcesPerBatch)
+	resSpanPtrs := make([]*otlpTraces.ResourceSpans, 0, o.resourcesPerBatch)
+	resSpans := make([]otlpTraces.ResourceSpans, o.resourcesPerBatch)
 
-	for _, res := range resources {
-		rs := &otlpTraces.ResourceSpans{
-			Resource: res,
-			ScopeSpans: []*otlpTraces.ScopeSpans{
-				{
-					Scope:     o.scope,
-					Spans:     make([]*otlpTraces.Span, 0, o.spansPerResource),
-					SchemaUrl: semconv.SchemaURL,
-				},
+	for i, res := range resources {
+		rs := &resSpans[i]
+		rs.Resource = res
+		rs.ScopeSpans = []*otlpTraces.ScopeSpans{
+			{
+				Scope:     o.scope,
+				Spans:     make([]*otlpTraces.Span, 0, o.spansPerResource),
+				SchemaUrl: semconv.SchemaURL,
 			},
-			SchemaUrl: semconv.SchemaURL,
 		}
+		rs.SchemaUrl = semconv.SchemaURL
 
 		traceId := o.idGen.OtelId(16)
 		nowNano := time.Now().UnixNano()
 
-		for i := 0; i < o.spansPerResource; i++ {
-			startTime := nowNano + int64(i)*int64(10_000_000)
+		spans := make([]otlpTraces.Span, o.spansPerResource)
 
-			span := &otlpTraces.Span{
-				TraceId:           traceId,
-				TraceState:        "active",
-				Name:              getSpanName(i),
-				Kind:              otlpTraces.Span_SPAN_KIND_SERVER,
-				StartTimeUnixNano: uint64(startTime),
-				EndTimeUnixNano:   uint64(nowNano + int64(o.spansPerResource)*int64(10_000_000)),
-				Attributes: []*otlpCommon.KeyValue{
-					{
-						Key:   "index",
-						Value: &otlpCommon.AnyValue{Value: &otlpCommon.AnyValue_IntValue{IntValue: int64(i)}},
-					},
+		for j := 0; j < o.spansPerResource; j++ {
+			startTime := nowNano + int64(j)*int64(10_000_000)
+
+			span := &spans[j]
+			span.TraceId = traceId
+			span.TraceState = "active"
+			span.Name = getSpanName(j)
+			span.Kind = otlpTraces.Span_SPAN_KIND_SERVER
+			span.StartTimeUnixNano = uint64(startTime)
+			span.EndTimeUnixNano = uint64(nowNano + int64(o.spansPerResource)*int64(10_000_000))
+			span.Attributes = []*otlpCommon.KeyValue{
+				{
+					Key:   "index",
+					Value: &otlpCommon.AnyValue{Value: &otlpCommon.AnyValue_IntValue{IntValue: int64(j)}},
 				},
-				DroppedAttributesCount: 0,
-				Events:                 make([]*otlpTraces.Span_Event, 0, 1),
-				DroppedEventsCount:     0,
-				Links:                  nil,
-				DroppedLinksCount:      0,
-				Status:                 nil,
 			}
+			span.DroppedAttributesCount = 0
+			span.Events = make([]*otlpTraces.Span_Event, 0, 1)
+			span.DroppedEventsCount = 0
+			span.Links = nil
+			span.DroppedLinksCount = 0
+			span.Status = nil
 			span.Attributes = msgIdGen.AddElementAttrs(span.Attributes)
 
 			span.SpanId = o.idGen.OtelId(8)
-			if i > 0 {
-				span.ParentSpanId = rs.ScopeSpans[0].Spans[i-1].SpanId
+			if j > 0 {
+				span.ParentSpanId = rs.ScopeSpans[0].Spans[j-1].SpanId
 			}
 
 			event := &otlpTraces.Span_Event{
@@ -280,10 +281,10 @@ func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource, msgIdGen worker
 			rs.ScopeSpans[0].Spans = append(rs.ScopeSpans[0].Spans, span)
 		}
 
-		spans = append(spans, rs)
+		resSpanPtrs = append(resSpanPtrs, rs)
 	}
 
-	return spans
+	return resSpanPtrs
 }
 
 // Common OpenTelemetry span names for realistic telemetry data
