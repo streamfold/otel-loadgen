@@ -38,6 +38,7 @@ type tracesWorker struct {
 	endpoint          *url.URL
 	useGRPC           bool
 	scope             *otlpCommon.InstrumentationScope
+	idGen             *util.ByteGen
 	wg                sync.WaitGroup
 	nextWorkerId      atomic.Uint64
 	stopChan          chan bool
@@ -57,6 +58,7 @@ func NewTracesWorker(log *zap.Logger, endpoint *url.URL, useGRPC bool, resources
 		resourcesPerBatch: resourcesPerBatch,
 		spansPerResource:  spansPerResource,
 		scope:             otlp.NewScope(),
+		idGen:             util.NewByteGen(),
 	}
 }
 
@@ -234,7 +236,7 @@ func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource, msgIdGen *worke
 			SchemaUrl: semconv.SchemaURL,
 		}
 
-		traceId := util.GenOtelId(16)
+		traceId := o.idGen.OtelId(16)
 		nowNano := time.Now().UnixNano()
 
 		for i := 0; i < o.spansPerResource; i++ {
@@ -262,7 +264,7 @@ func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource, msgIdGen *worke
 			}
 			span.Attributes = msgIdGen.AddElementAttrs(span.Attributes)
 
-			span.SpanId = util.GenOtelId(8)
+			span.SpanId = o.idGen.OtelId(8)
 			if i > 0 {
 				span.ParentSpanId = rs.ScopeSpans[0].Spans[i-1].SpanId
 			}
