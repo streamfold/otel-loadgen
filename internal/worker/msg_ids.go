@@ -7,9 +7,16 @@ import (
 	otlpCommon "go.opentelemetry.io/proto/otlp/common/v1"
 )
 
+type MsgIdGenerator interface {
+	Start()
+	Stop()
+	AddResourceAttrs(attrs []*otlpCommon.KeyValue) []*otlpCommon.KeyValue
+	AddElementAttrs(attrs []*otlpCommon.KeyValue) []*otlpCommon.KeyValue
+}
+
 const ALLOC_SIZE = 1000
 
-type MsgIdGenerator struct {
+type msgIdGenerator struct {
 	generatorId string
 	nextStartId uint64
 	ctrlChan    chan<- control.Control
@@ -29,8 +36,8 @@ type MsgID struct {
 	ID      uint64
 }
 
-func NewMsgIdGenerator(generatorId string, ctrlChan chan<- control.Control) *MsgIdGenerator {
-	return &MsgIdGenerator{
+func NewMsgIdGenerator(generatorId string, ctrlChan chan<- control.Control) MsgIdGenerator {
+	return &msgIdGenerator{
 		generatorId: generatorId,
 		nextStartId: 1,
 		ctrlChan:    ctrlChan,
@@ -38,7 +45,7 @@ func NewMsgIdGenerator(generatorId string, ctrlChan chan<- control.Control) *Msg
 }
 
 // Add the generator ID to the resource attributes
-func (g *MsgIdGenerator) AddResourceAttrs(attrs []*otlpCommon.KeyValue) []*otlpCommon.KeyValue {
+func (g *msgIdGenerator) AddResourceAttrs(attrs []*otlpCommon.KeyValue) []*otlpCommon.KeyValue {
 	return append(attrs, &otlpCommon.KeyValue{
 		Key:   string(RES_ATTR_GENERATOR_ID),
 		Value: &otlpCommon.AnyValue{Value: &otlpCommon.AnyValue_StringValue{StringValue: g.generatorId}},
@@ -46,7 +53,7 @@ func (g *MsgIdGenerator) AddResourceAttrs(attrs []*otlpCommon.KeyValue) []*otlpC
 }
 
 // Add the individual element attributes, will allocate a new message range as needed
-func (g *MsgIdGenerator) AddElementAttrs(attrs []*otlpCommon.KeyValue) []*otlpCommon.KeyValue {
+func (g *msgIdGenerator) AddElementAttrs(attrs []*otlpCommon.KeyValue) []*otlpCommon.KeyValue {
 	nextId := g.nextId()
 
 	attrs = append(attrs, &otlpCommon.KeyValue{
@@ -65,30 +72,30 @@ func (g *MsgIdGenerator) AddElementAttrs(attrs []*otlpCommon.KeyValue) []*otlpCo
 	return attrs
 }
 
-func (g *MsgIdGenerator) Start() {
-	
+func (g *msgIdGenerator) Start() {
+
 }
 
-func (g *MsgIdGenerator) Stop() {
+func (g *msgIdGenerator) Stop() {
 	if g.ctrlChan == nil || g.currRange == nil {
 		return
 	}
-	
+
 	// Entire range was not used, send update
 	if g.currRange.used < g.currRange.len {
 		g.ctrlChan <- control.Control{
-			Type:  control.ControlTypeUpdate,
+			Type: control.ControlTypeUpdate,
 			Range: control.MessageRange{
 				GeneratorID: g.generatorId,
 				StartID:     g.currRange.startId,
 				RangeLen:    g.currRange.used,
-				Timestamp:   g.currRange.timestamp,				
+				Timestamp:   g.currRange.timestamp,
 			},
 		}
 	}
 }
 
-func (g *MsgIdGenerator) nextRange(len uint) *msgIdRange {
+func (g *msgIdGenerator) nextRange(len uint) *msgIdRange {
 	mid := &msgIdRange{
 		startId:   g.nextStartId,
 		len:       len,
@@ -100,12 +107,12 @@ func (g *MsgIdGenerator) nextRange(len uint) *msgIdRange {
 
 	if g.ctrlChan != nil {
 		g.ctrlChan <- control.Control{
-			Type:  control.ControlTypeNew,
+			Type: control.ControlTypeNew,
 			Range: control.MessageRange{
 				GeneratorID: g.generatorId,
 				StartID:     mid.startId,
 				RangeLen:    mid.len,
-				Timestamp:   mid.timestamp,				
+				Timestamp:   mid.timestamp,
 			},
 		}
 	}
@@ -113,7 +120,7 @@ func (g *MsgIdGenerator) nextRange(len uint) *msgIdRange {
 	return mid
 }
 
-func (g *MsgIdGenerator) nextId() MsgID {
+func (g *msgIdGenerator) nextId() MsgID {
 	if g.currRange == nil || g.currRange.isFull() {
 		g.currRange = g.nextRange(ALLOC_SIZE)
 	}
@@ -184,12 +191,12 @@ func ExtractMsgIdParams(attrs []*otlpCommon.KeyValue) (MsgID, bool) {
 			msgID.ID = uint64(id)
 			haveID = true
 		}
-		
+
 		if haveID && haveLen && haveStartID {
 			break
 		}
 	}
-	
+
 	return msgID, haveID && haveLen && haveStartID
 }
 
@@ -204,4 +211,28 @@ func getIntValue(value *otlpCommon.AnyValue) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+type nopMsgIdGenerator struct{}
+
+func NopMsgIdGenerator() MsgIdGenerator {
+	return nopMsgIdGenerator{}
+}
+
+// AddElementAttrs implements MsgIdGenerator.
+func (n nopMsgIdGenerator) AddElementAttrs(attrs []*otlpCommon.KeyValue) []*otlpCommon.KeyValue {
+	return attrs
+}
+
+// AddResourceAttrs implements MsgIdGenerator.
+func (n nopMsgIdGenerator) AddResourceAttrs(attrs []*otlpCommon.KeyValue) []*otlpCommon.KeyValue {
+	return attrs
+}
+
+// Start implements MsgIdGenerator.
+func (n nopMsgIdGenerator) Start() {
+}
+
+// Stop implements MsgIdGenerator.
+func (n nopMsgIdGenerator) Stop() {
 }

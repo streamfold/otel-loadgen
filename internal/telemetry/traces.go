@@ -92,7 +92,7 @@ func (o *tracesWorker) Init(statsBuilder stats.Builder, client *http.Client) err
 	return nil
 }
 
-func (o *tracesWorker) Start(pushInterval time.Duration, msgIdGen *worker.MsgIdGenerator) {
+func (o *tracesWorker) Start(pushInterval time.Duration, msgIdGen worker.MsgIdGenerator) {
 	pusherIdx := o.nextWorkerId.Add(1)
 	ticker := time.NewTicker(pushInterval)
 
@@ -112,7 +112,7 @@ func (o *tracesWorker) StopAll() {
 	o.wg.Wait()
 }
 
-func (o *tracesWorker) pushWait(ticker *time.Ticker, idx uint64, msgIdGen *worker.MsgIdGenerator) {
+func (o *tracesWorker) pushWait(ticker *time.Ticker, idx uint64, msgIdGen worker.MsgIdGenerator) {
 	resources := make([]*otlpRes.Resource, 0)
 	for i := 0; i < o.resourcesPerBatch; i++ {
 		res := otlp.NewResource(idx, i)
@@ -130,7 +130,7 @@ func (o *tracesWorker) pushWait(ticker *time.Ticker, idx uint64, msgIdGen *worke
 	}
 }
 
-func (o *tracesWorker) pushIt(idx uint64, resources []*otlpRes.Resource, msgIdGen *worker.MsgIdGenerator) {
+func (o *tracesWorker) pushIt(idx uint64, resources []*otlpRes.Resource, msgIdGen worker.MsgIdGenerator) {
 	batch := o.buildBatch(resources, msgIdGen)
 
 	if o.useGRPC {
@@ -220,7 +220,7 @@ func (o *tracesWorker) pushBatchHTTP(idx uint64, batch []*otlpTraces.ResourceSpa
 	o.statTracesSent.Incr(uint64(o.spansPerResource))
 }
 
-func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource, msgIdGen *worker.MsgIdGenerator) []*otlpTraces.ResourceSpans {
+func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource, msgIdGen worker.MsgIdGenerator) []*otlpTraces.ResourceSpans {
 	spans := make([]*otlpTraces.ResourceSpans, 0, o.resourcesPerBatch)
 
 	for _, res := range resources {

@@ -14,15 +14,15 @@ import (
 )
 
 type Workers struct {
-	cfg          Config
-	log          *zap.Logger
-	workers      []Worker
-	stats        stats.Tracker
-	statsStop    chan bool
-	statsWg      *sync.WaitGroup
-	client       *http.Client
+	cfg         Config
+	log         *zap.Logger
+	workers     []Worker
+	stats       stats.Tracker
+	statsStop   chan bool
+	statsWg     *sync.WaitGroup
+	client      *http.Client
 	ctrl_client *control.Client
-	msg_id_gens []*MsgIdGenerator
+	msgIdGens   []MsgIdGenerator
 }
 
 type Config struct {
@@ -41,14 +41,14 @@ func New(cfg Config, log *zap.Logger, client *http.Client) (*Workers, error) {
 			return nil, err
 		}
 	}
-	
+
 	return &Workers{
-		cfg:    cfg,
-		log:    log,
-		stats:  stats.NewStatTracker(),
-		client: client,
+		cfg:         cfg,
+		log:         log,
+		stats:       stats.NewStatTracker(),
+		client:      client,
 		ctrl_client: ctrl_client,
-		msg_id_gens: make([]*MsgIdGenerator, 0),
+		msgIdGens:   make([]MsgIdGenerator, 0),
 	}, nil
 }
 
@@ -68,15 +68,11 @@ func (w *Workers) Start() {
 	}
 	for _, worker := range w.workers {
 		for i := 0; i < w.cfg.NumWorkers; i++ {
-			var ctrlChan chan <- control.Control
-			if w.ctrl_client != nil {
-				ctrlChan = w.ctrl_client.MessageChannel()
-			}
-			msg_id := NewMsgIdGenerator(uuid.New().String(), ctrlChan)
-			w.msg_id_gens = append(w.msg_id_gens, msg_id)
-			msg_id.Start()
-			
-			worker.Start(w.cfg.PushInterval, msg_id)
+			idGen := w.newIdGen()
+			w.msgIdGens = append(w.msgIdGens, idGen)
+			idGen.Start()
+
+			worker.Start(w.cfg.PushInterval, idGen)
 		}
 	}
 
@@ -99,14 +95,22 @@ func (w *Workers) Stop() {
 	for _, worker := range w.workers {
 		worker.StopAll()
 	}
-	
-	for _, msg_id := range w.msg_id_gens {
+
+	for _, msg_id := range w.msgIdGens {
 		msg_id.Stop()
 	}
-	
+
 	if w.ctrl_client != nil {
 		w.ctrl_client.Stop()
 	}
+}
+
+func (w *Workers) newIdGen() MsgIdGenerator {
+	if w.ctrl_client == nil {
+		return NopMsgIdGenerator()
+	}
+
+	return NewMsgIdGenerator(uuid.New().String(), w.ctrl_client.MessageChannel())
 }
 
 func (w *Workers) printStats(ticker *time.Ticker) {
