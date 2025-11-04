@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -80,7 +81,15 @@ func (s *Server) report() {
 	}
 
 	fmt.Printf("REPORT [%s]:\n", time.Now().Format(time.RFC3339))
-	for genID, report := range reports {
+
+	sortedIds := make([]string, 0, len(reports))
+	for genId := range reports {
+		sortedIds = append(sortedIds, genId)
+	}
+	sort.Strings(sortedIds)
+
+	for _, genID := range sortedIds {
+		report := reports[genID]
 		s.reportGenerator(genID, report)
 	}
 }
