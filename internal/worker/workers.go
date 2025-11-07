@@ -7,28 +7,49 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/streamfold/otel-loadgen/internal/control"
 	"github.com/streamfold/otel-loadgen/internal/stats"
+	"go.uber.org/zap"
 )
 
 type Workers struct {
-	workers    []Worker
-	stats      stats.Tracker
-	statsStop  chan bool
-	statsWg    *sync.WaitGroup
-	client     *http.Client
-	numWorkers int
-	reportInterval time.Duration
-	pushInterval time.Duration
+	cfg         Config
+	log         *zap.Logger
+	workers     []Worker
+	stats       stats.Tracker
+	statsStop   chan bool
+	statsWg     *sync.WaitGroup
+	client      *http.Client
+	ctrl_client *control.Client
+	msgIdGens   []MsgIdGenerator
 }
 
-func New(numWorkers int, reportInterval time.Duration, pushInterval time.Duration, client *http.Client) *Workers {
-	return &Workers{
-		numWorkers: numWorkers,
-		reportInterval: reportInterval,
-		pushInterval: pushInterval,
-		stats:      stats.NewStatTracker(),
-		client:     client,
+type Config struct {
+	NumWorkers      int
+	ReportInterval  time.Duration
+	PushInterval    time.Duration
+	ControlEndpoint string
+}
+
+func New(cfg Config, log *zap.Logger, client *http.Client) (*Workers, error) {
+	var ctrl_client *control.Client
+	if cfg.ControlEndpoint != "" {
+		var err error
+		ctrl_client, err = control.NewClient(cfg.ControlEndpoint, log)
+		if err != nil {
+			return nil, err
+		}
 	}
+
+	return &Workers{
+		cfg:         cfg,
+		log:         log,
+		stats:       stats.NewStatTracker(),
+		client:      client,
+		ctrl_client: ctrl_client,
+		msgIdGens:   make([]MsgIdGenerator, 0),
+	}, nil
 }
 
 func (w *Workers) Add(domain string, worker Worker) error {
@@ -42,14 +63,21 @@ func (w *Workers) Add(domain string, worker Worker) error {
 }
 
 func (w *Workers) Start() {
+	if w.ctrl_client != nil {
+		w.ctrl_client.Start()
+	}
 	for _, worker := range w.workers {
-		for i := 0; i < w.numWorkers; i++ {
-			worker.Start(w.pushInterval)
+		for i := 0; i < w.cfg.NumWorkers; i++ {
+			idGen := w.newIdGen()
+			w.msgIdGens = append(w.msgIdGens, idGen)
+			idGen.Start()
+
+			worker.Start(w.cfg.PushInterval, idGen)
 		}
 	}
 
 	w.statsStop = make(chan bool)
-	ticker := time.NewTicker(w.reportInterval)
+	ticker := time.NewTicker(w.cfg.ReportInterval)
 
 	w.statsWg = &sync.WaitGroup{}
 	w.statsWg.Add(1)
@@ -67,6 +95,22 @@ func (w *Workers) Stop() {
 	for _, worker := range w.workers {
 		worker.StopAll()
 	}
+
+	for _, msg_id := range w.msgIdGens {
+		msg_id.Stop()
+	}
+
+	if w.ctrl_client != nil {
+		w.ctrl_client.Stop()
+	}
+}
+
+func (w *Workers) newIdGen() MsgIdGenerator {
+	if w.ctrl_client == nil {
+		return NopMsgIdGenerator()
+	}
+
+	return NewMsgIdGenerator(uuid.New().String(), w.ctrl_client.MessageChannel())
 }
 
 func (w *Workers) printStats(ticker *time.Ticker) {

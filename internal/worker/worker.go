@@ -10,6 +10,6 @@ import (
 type Worker interface {
 	Init(stats stats.Builder, client *http.Client) error
 
-	Start(pushFrequency time.Duration)
+	Start(pushFrequency time.Duration, msgIdGen MsgIdGenerator)
 	StopAll()
 }
