@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/streamfold/otel-loadgen/internal/genai"
 	"github.com/streamfold/otel-loadgen/internal/otlp"
 	"github.com/streamfold/otel-loadgen/internal/stats"
 	"github.com/streamfold/otel-loadgen/internal/util"
@@ -48,9 +49,10 @@ type tracesWorker struct {
 	statBatchesSent   stats.Stat
 	statTracesSent    stats.Stat
 	tracesClient      otlpTraceColl.TraceServiceClient
+	genAICorpus       *genai.Corpus
 }
 
-func NewTracesWorker(log *zap.Logger, endpoint *url.URL, useGRPC bool, resourcesPerBatch int, spansPerResource int) worker.Worker {
+func NewTracesWorker(log *zap.Logger, endpoint *url.URL, useGRPC bool, resourcesPerBatch int, spansPerResource int, genAICorpus *genai.Corpus) worker.Worker {
 	return &tracesWorker{
 		log:               log,
 		useGRPC:           useGRPC,
@@ -59,6 +61,7 @@ func NewTracesWorker(log *zap.Logger, endpoint *url.URL, useGRPC bool, resources
 		spansPerResource:  spansPerResource,
 		scope:             otlp.NewScope(),
 		idGen:             util.NewByteGen(),
+		genAICorpus:       genAICorpus,
 	}
 }
 
@@ -257,6 +260,12 @@ func (o *tracesWorker) buildBatch(resources []*otlpRes.Resource, msgIdGen worker
 					Value: &otlpCommon.AnyValue{Value: &otlpCommon.AnyValue_IntValue{IntValue: int64(j)}},
 				},
 			}
+
+			// Add gen_ai attributes if corpus is loaded
+			if o.genAICorpus != nil {
+				span.Attributes = append(span.Attributes, o.genAICorpus.GenAIAttributes()...)
+			}
+
 			span.DroppedAttributesCount = 0
 			span.Events = make([]*otlpTraces.Span_Event, 0, 1)
 			span.DroppedEventsCount = 0
