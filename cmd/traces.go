@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/streamfold/otel-loadgen/internal/genai"
 	"github.com/streamfold/otel-loadgen/internal/telemetry"
 	"github.com/streamfold/otel-loadgen/internal/worker"
 	"go.uber.org/zap"
@@ -29,11 +30,15 @@ var tracesCmd = &cobra.Command{
 }
 
 var spansPerResource int
+var enableGenAI bool
+var genAICorpusPath string
 
 func init() {
 	genCmd.AddCommand(tracesCmd)
 
 	tracesCmd.Flags().IntVar(&spansPerResource, "spans-per-resource", 100, "How many trace spans per resource to generate")
+	tracesCmd.Flags().BoolVar(&enableGenAI, "gen-ai", false, "Enable gen_ai span attributes using corpus data")
+	tracesCmd.Flags().StringVar(&genAICorpusPath, "gen-ai-corpus", "contrib/apigen-mt_5k.json.gz", "Path to the gen_ai corpus file (supports .gz)")
 }
 
 func runTracesCmd() error {
@@ -41,12 +46,23 @@ func runTracesCmd() error {
 	if err != nil {
 		return err
 	}
-	
+
 	endpoint, err := parseOtlpEndpoint()
 	if err != nil {
 		return err
 	}
-	
+
+	// Load gen_ai corpus if enabled
+	var corpus *genai.Corpus
+	if enableGenAI {
+		zl.Info("Loading gen_ai corpus", zap.String("path", genAICorpusPath))
+		corpus, err = genai.LoadCorpus(genAICorpusPath)
+		if err != nil {
+			return err
+		}
+		zl.Info("Loaded gen_ai corpus", zap.Int("entries", corpus.Size()))
+	}
+
 	workerCfg := worker.Config{
 		NumWorkers:      numWorkers,
 		ReportInterval:  reportInterval,
@@ -59,7 +75,7 @@ func runTracesCmd() error {
 		return err
 	}
 
-	traceWorker := telemetry.NewTracesWorker(zl, endpoint, true, otlpResourcesPerBatch, spansPerResource)
+	traceWorker := telemetry.NewTracesWorker(zl, endpoint, true, otlpResourcesPerBatch, spansPerResource, corpus)
 
 	if err := workers.Add("OTLP Traces", traceWorker); err != nil {
 		return err
