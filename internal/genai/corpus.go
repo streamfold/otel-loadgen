@@ -137,11 +137,7 @@ func GenAIAttributesFromEntry(entry *Entry) []*otlpCommon.KeyValue {
 	for _, conv := range entry.Conversations {
 		switch conv.From {
 		case "human":
-			if inputMessages == "" {
-				inputMessages = conv.Value
-			} else {
-				inputMessages = conv.Value // Use last human message
-			}
+			inputMessages = conv.Value // Use last human message
 		case "gpt":
 			outputMessages = conv.Value // Use last gpt message
 		}
