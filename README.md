@@ -32,6 +32,8 @@ otel-loadgen gen traces [flags]
 | `--push-interval`            | `50ms`           | Interval between batch pushes                         |
 | `--workers`                  | `1`              | Number of concurrent workers to run                   |
 | `--control-endpoint`         | (none)           | Endpoint of control server for distributed testing    |
+| `--header`                   | (none)           | Custom headers to send (format: `Key=Value`, repeatable) |
+| `--http`                     | `false`          | Use HTTP/JSON instead of gRPC for OTLP export         |
 
 ### Sink Command (`sink`)
 
@@ -92,6 +94,12 @@ docker run -ti streamfold/otel-loadgen sink [...]
   --spans-per-resource 1000 \
   --push-interval 10ms \
   --otlp-resources-per-batch 5
+
+# Send traces with custom authorization header
+./dist/otel-loadgen gen traces \
+  --otlp-endpoint http://collector:4317 \
+  --header "Authorization=Bearer <token>" \
+  --header "X-Custom-Header=value"
 ```
 
 ### Sink Server
