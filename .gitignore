@@ -1,1 +1,7 @@
 dist/
+
+# MacOS
+.DS_Store
+
+# Corpus files
+contrib/*.json
