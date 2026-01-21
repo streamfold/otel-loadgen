@@ -12,7 +12,7 @@ import (
 	otlpCommon "go.opentelemetry.io/proto/otlp/common/v1"
 )
 
-// Conversation represents a single conversation turn
+// Conversation represents a single conversation turn from the corpus
 type Conversation struct {
 	From  string `json:"from"`
 	Value string `json:"value"`
@@ -23,6 +23,37 @@ type Entry struct {
 	Conversations []Conversation `json:"conversations"`
 	Tools         string         `json:"tools"`
 	System        string         `json:"system"`
+}
+
+// MessagePart represents a part of a GenAI message
+type MessagePart struct {
+	Type      string `json:"type"`
+	Content   string `json:"content,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Result    string `json:"result,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
+// Message represents a GenAI message in OTel format
+type Message struct {
+	Role  string        `json:"role"`
+	Parts []MessagePart `json:"parts"`
+}
+
+// ToolDefinition represents a tool definition in OTel format
+type ToolDefinition struct {
+	Type        string          `json:"type"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+// CorpusToolDefinition represents a tool definition from the corpus (without type field)
+type CorpusToolDefinition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 // Corpus holds the loaded dataset
@@ -132,23 +163,29 @@ func GenAIAttributesFromEntry(entry *Entry) []*otlpCommon.KeyValue {
 	attrs = append(attrs, stringAttr("gen_ai.request.model", modelName))
 	attrs = append(attrs, stringAttr("gen_ai.response.model", modelName))
 
-	// Extract input and output messages from conversations
-	var inputMessages, outputMessages string
-	for _, conv := range entry.Conversations {
-		switch conv.From {
-		case "human":
-			inputMessages = conv.Value // Use last human message
-		case "gpt":
-			outputMessages = conv.Value // Use last gpt message
+	// Convert conversations to OTel format
+	inputMessages, outputMessages := convertConversationsToOTelFormat(entry.Conversations)
+
+	// Calculate token counts based on total message content length
+	inputLen := 0
+	outputLen := 0
+	for _, msg := range inputMessages {
+		for _, part := range msg.Parts {
+			inputLen += len(part.Content) + len(part.Result) + len(part.Arguments)
+		}
+	}
+	for _, msg := range outputMessages {
+		for _, part := range msg.Parts {
+			outputLen += len(part.Content) + len(part.Result) + len(part.Arguments)
 		}
 	}
 
-	// Simulate token counts based on message lengths (rough approximation: ~4 chars per token)
-	inputTokens := len(inputMessages) / 4
+	// Simulate token counts (rough approximation: ~4 chars per token)
+	inputTokens := inputLen / 4
 	if inputTokens < 10 {
 		inputTokens = 10
 	}
-	outputTokens := len(outputMessages) / 4
+	outputTokens := outputLen / 4
 	if outputTokens < 10 {
 		outputTokens = 10
 	}
@@ -168,25 +205,139 @@ func GenAIAttributesFromEntry(entry *Entry) []*otlpCommon.KeyValue {
 	responseID := fmt.Sprintf("resp-%d", rand.Int63())
 	attrs = append(attrs, stringAttr("gen_ai.response.id", responseID))
 
-	// Input/output messages (last messages from conversation)
-	if inputMessages != "" {
-		attrs = append(attrs, stringAttr("gen_ai.input.messages", inputMessages))
-	}
-	if outputMessages != "" {
-		attrs = append(attrs, stringAttr("gen_ai.output.messages", outputMessages))
+	// Input messages as JSON string
+	// Format: [{"role":"user","parts":[{"type":"text","content":"..."}]}, {"role":"assistant","parts":[{"type":"tool_call","id":"call_123","name":"func","arguments":"{}"}]}, {"role":"tool","parts":[{"type":"tool_call_response","id":"call_123","result":"..."}]}]
+	if len(inputMessages) > 0 {
+		if jsonBytes, err := json.Marshal(inputMessages); err == nil {
+			attrs = append(attrs, stringAttr("gen_ai.input.messages", string(jsonBytes)))
+		}
 	}
 
-	// System instructions
+	// Output messages as JSON string
+	// Format: [{"role":"assistant","parts":[{"type":"text","content":"..."}]}]
+	if len(outputMessages) > 0 {
+		if jsonBytes, err := json.Marshal(outputMessages); err == nil {
+			attrs = append(attrs, stringAttr("gen_ai.output.messages", string(jsonBytes)))
+		}
+	}
+
+	// System instructions as JSON array string
+	// Format: [{"type":"text","content":"..."}]
 	if entry.System != "" {
-		attrs = append(attrs, stringAttr("gen_ai.system.instructions", entry.System))
+		systemInstructions := []map[string]string{
+			{"type": "text", "content": entry.System},
+		}
+		if jsonBytes, err := json.Marshal(systemInstructions); err == nil {
+			attrs = append(attrs, stringAttr("gen_ai.system_instructions", string(jsonBytes)))
+		}
 	}
 
-	// Tool definitions
+	// Tool definitions as JSON array string
+	// Format: [{"type":"function","name":"...","description":"...","parameters":{...}}]
 	if entry.Tools != "" {
-		attrs = append(attrs, stringAttr("gen_ai.tool.definitions", entry.Tools))
+		toolDefs := parseToolDefinitions(entry.Tools)
+		if len(toolDefs) > 0 {
+			if jsonBytes, err := json.Marshal(toolDefs); err == nil {
+				attrs = append(attrs, stringAttr("gen_ai.tool.definitions", string(jsonBytes)))
+			}
+		}
 	}
 
 	return attrs
+}
+
+// parseToolDefinitions parses corpus tool JSON into OTel ToolDefinitions
+func parseToolDefinitions(toolsJSON string) []ToolDefinition {
+	var corpusTools []CorpusToolDefinition
+	if err := json.Unmarshal([]byte(toolsJSON), &corpusTools); err != nil {
+		return nil
+	}
+
+	result := make([]ToolDefinition, 0, len(corpusTools))
+	for _, ct := range corpusTools {
+		result = append(result, ToolDefinition{
+			Type:        "function",
+			Name:        ct.Name,
+			Description: ct.Description,
+			Parameters:  ct.Parameters,
+		})
+	}
+	return result
+}
+
+// convertConversationsToOTelFormat converts corpus conversations to proper GenAI message format
+func convertConversationsToOTelFormat(conversations []Conversation) (inputMessages []Message, outputMessages []Message) {
+	lastToolCallID := ""
+
+	for i, conv := range conversations {
+		switch conv.From {
+		case "human":
+			// Human messages become user role
+			msg := Message{
+				Role: "user",
+				Parts: []MessagePart{
+					{
+						Type:    "text",
+						Content: conv.Value,
+					},
+				},
+			}
+			inputMessages = append(inputMessages, msg)
+
+		case "gpt":
+			// GPT messages become assistant role - check if they contain tool calls
+			msg := Message{
+				Role:  "assistant",
+				Parts: []MessagePart{},
+			}
+
+			// For simplicity, treat all GPT messages as text content
+			// In a real implementation, you'd parse for tool calls
+			msg.Parts = append(msg.Parts, MessagePart{
+				Type:    "text",
+				Content: conv.Value,
+			})
+
+			// Check if this is the last message in the conversation
+			if i == len(conversations)-1 {
+				outputMessages = append(outputMessages, msg)
+			} else {
+				inputMessages = append(inputMessages, msg)
+			}
+
+		case "function_call":
+			// Function calls become assistant tool_call messages
+			lastToolCallID = fmt.Sprintf("call_%d", rand.Int63())
+			msg := Message{
+				Role: "assistant",
+				Parts: []MessagePart{
+					{
+						Type:      "tool_call",
+						ID:        lastToolCallID,
+						Name:      "function_name", // Would parse from conv.Value in real implementation
+						Arguments: conv.Value,
+					},
+				},
+			}
+			inputMessages = append(inputMessages, msg)
+
+		case "observation":
+			// Observations become tool response messages
+			msg := Message{
+				Role: "tool",
+				Parts: []MessagePart{
+					{
+						Type:   "tool_call_response",
+						ID:     lastToolCallID,
+						Result: conv.Value,
+					},
+				},
+			}
+			inputMessages = append(inputMessages, msg)
+		}
+	}
+
+	return inputMessages, outputMessages
 }
 
 func stringAttr(key, value string) *otlpCommon.KeyValue {

@@ -35,6 +35,8 @@ var controlEndpoint string
 
 var numWorkers int
 
+var customHeaders []string
+
 func init() {
 	rootCmd.AddCommand(genCmd)
 	
@@ -48,6 +50,8 @@ func init() {
 	genCmd.PersistentFlags().IntVar(&numWorkers, "workers", 1, "How many concurrent workers to run")
 	
 	genCmd.PersistentFlags().StringVar(&controlEndpoint, "control-endpoint", "", "Endpoint of control server")
+
+	genCmd.PersistentFlags().StringSliceVar(&customHeaders, "header", []string{}, "Custom headers to send (format: 'Key=Value', can be repeated)")
 }
 
 func defaultTransportDialContext(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
@@ -81,4 +85,16 @@ func parseOtlpEndpoint() (*url.URL, error) {
 	}
 	
 	return url.Parse(otlpEndpoint)
+}
+
+func parseCustomHeaders() (map[string]string, error) {
+	headers := make(map[string]string)
+	for _, h := range customHeaders {
+		parts := strings.SplitN(h, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid header format: %q (expected 'Key=Value')", h)
+		}
+		headers[parts[0]] = parts[1]
+	}
+	return headers, nil
 }

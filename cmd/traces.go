@@ -32,6 +32,7 @@ var tracesCmd = &cobra.Command{
 var spansPerResource int
 var enableGenAI bool
 var genAICorpusPath string
+var useHTTP bool
 
 func init() {
 	genCmd.AddCommand(tracesCmd)
@@ -39,6 +40,7 @@ func init() {
 	tracesCmd.Flags().IntVar(&spansPerResource, "spans-per-resource", 100, "How many trace spans per resource to generate")
 	tracesCmd.Flags().BoolVar(&enableGenAI, "gen-ai", false, "Enable gen_ai span attributes using corpus data")
 	tracesCmd.Flags().StringVar(&genAICorpusPath, "gen-ai-corpus", "contrib/apigen-mt_5k.json.gz", "Path to the gen_ai corpus file (supports .gz)")
+	tracesCmd.Flags().BoolVar(&useHTTP, "http", false, "Use HTTP/JSON instead of gRPC for OTLP export")
 }
 
 func runTracesCmd() error {
@@ -48,6 +50,11 @@ func runTracesCmd() error {
 	}
 
 	endpoint, err := parseOtlpEndpoint()
+	if err != nil {
+		return err
+	}
+
+	headers, err := parseCustomHeaders()
 	if err != nil {
 		return err
 	}
@@ -75,7 +82,7 @@ func runTracesCmd() error {
 		return err
 	}
 
-	traceWorker := telemetry.NewTracesWorker(zl, endpoint, true, otlpResourcesPerBatch, spansPerResource, corpus)
+	traceWorker := telemetry.NewTracesWorker(zl, endpoint, !useHTTP, otlpResourcesPerBatch, spansPerResource, corpus, headers)
 
 	if err := workers.Add("OTLP Traces", traceWorker); err != nil {
 		return err

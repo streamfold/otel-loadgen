@@ -28,7 +28,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -50,9 +49,15 @@ type tracesWorker struct {
 	statTracesSent    stats.Stat
 	tracesClient      otlpTraceColl.TraceServiceClient
 	genAICorpus       *genai.Corpus
+	customHeaders     map[string]string
 }
 
-func NewTracesWorker(log *zap.Logger, endpoint *url.URL, useGRPC bool, resourcesPerBatch int, spansPerResource int, genAICorpus *genai.Corpus) worker.Worker {
+func NewTracesWorker(log *zap.Logger, endpoint *url.URL, useGRPC bool, resourcesPerBatch int, spansPerResource int, genAICorpus *genai.Corpus, customHeaders map[string]string) worker.Worker {
+	// For HTTP mode, ensure the endpoint has the /v1/traces path
+	if !useGRPC && (endpoint.Path == "" || endpoint.Path == "/") {
+		endpoint.Path = "/v1/traces"
+	}
+
 	return &tracesWorker{
 		log:               log,
 		useGRPC:           useGRPC,
@@ -62,6 +67,7 @@ func NewTracesWorker(log *zap.Logger, endpoint *url.URL, useGRPC bool, resources
 		scope:             otlp.NewScope(),
 		idGen:             util.NewByteGen(),
 		genAICorpus:       genAICorpus,
+		customHeaders:     customHeaders,
 	}
 }
 
@@ -148,9 +154,13 @@ func (o *tracesWorker) pushBatchGRPC(idx uint64, batch []*otlpTraces.ResourceSpa
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	md := metadata.New(map[string]string{
+	mdMap := map[string]string{
 		"x-forwarded-for": fmt.Sprintf("127.0.0.%d", idx),
-	})
+	}
+	for k, v := range o.customHeaders {
+		mdMap[k] = v
+	}
+	md := metadata.New(mdMap)
 	ctx = metadata.NewOutgoingContext(ctx, md)
 
 	msg := &otlpTraceColl.ExportTraceServiceRequest{ResourceSpans: batch}
@@ -169,9 +179,10 @@ func (o *tracesWorker) pushBatchGRPC(idx uint64, batch []*otlpTraces.ResourceSpa
 }
 
 func (o *tracesWorker) pushBatchHTTP(idx uint64, batch []*otlpTraces.ResourceSpans) {
-	tracesData := otlpTraces.TracesData{ResourceSpans: batch}
+	// Use the ExportTraceServiceRequest for proper OTLP HTTP format
+	msg := &otlpTraceColl.ExportTraceServiceRequest{ResourceSpans: batch}
 
-	buf, err := protojson.Marshal(&tracesData)
+	buf, err := proto.Marshal(msg)
 	if err != nil {
 		panic(err)
 	}
@@ -202,8 +213,12 @@ func (o *tracesWorker) pushBatchHTTP(idx uint64, batch []*otlpTraces.ResourceSpa
 	}
 
 	req.Header.Set("X-Forwarded-For", remoteAddr)
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Content-Encoding", "gzip")
+
+	for k, v := range o.customHeaders {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := o.client.Do(req)
 	if err != nil {
@@ -211,7 +226,12 @@ func (o *tracesWorker) pushBatchHTTP(idx uint64, batch []*otlpTraces.ResourceSpa
 	}
 
 	if resp.StatusCode/100 != 2 {
-		o.log.Error("unexpected status code received", zap.Int("status", resp.StatusCode))
+		body, _ := io.ReadAll(resp.Body)
+		o.log.Error("unexpected status code received", 
+			zap.Int("status", resp.StatusCode),
+			zap.String("body", string(body)))
+		_ = resp.Body.Close()
+		return
 	}
 
 	_, _ = io.ReadAll(resp.Body)
