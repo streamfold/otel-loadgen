@@ -110,13 +110,13 @@ func findInKvlist(kvs []*otlpCommon.KeyValue, key string) *otlpCommon.AnyValue {
 	return nil
 }
 
-func TestMessagePartToAnyValue_Text(t *testing.T) {
+func TestMessagePartToOTel_Text(t *testing.T) {
 	part := MessagePart{
 		Type:    "text",
 		Content: "Hello, world!",
 	}
 
-	av := part.ToAnyValue()
+	av := part.ToOTel()
 	kvs := getKvlist(av)
 
 	if kvs == nil {
@@ -136,15 +136,15 @@ func TestMessagePartToAnyValue_Text(t *testing.T) {
 	}
 }
 
-func TestMessagePartToAnyValue_ToolCall(t *testing.T) {
+func TestMessagePartToOTel_ToolCall(t *testing.T) {
 	part := MessagePart{
 		Type:      "tool_call",
 		ID:        "call_123",
 		Name:      "get_weather",
-		Arguments: json.RawMessage(`{"location": "Paris"}`),
+		Arguments: `{"location": "Paris"}`,
 	}
 
-	av := part.ToAnyValue()
+	av := part.ToOTel()
 	kvs := getKvlist(av)
 
 	if kvs == nil {
@@ -166,24 +166,48 @@ func TestMessagePartToAnyValue_ToolCall(t *testing.T) {
 		t.Errorf("Expected name='get_weather'")
 	}
 
-	// Check arguments is a kvlist (structured), not a string
+	// Check arguments is a string
 	argsVal := findInKvlist(kvs, "arguments")
 	if argsVal == nil {
 		t.Fatal("Expected arguments to be present")
 	}
-	argsKvs := getKvlist(argsVal)
-	if argsKvs == nil {
-		t.Errorf("Expected arguments to be structured kvlist, got %T", argsVal.Value)
-	}
-
-	// Check nested location value
-	locationVal := findInKvlist(argsKvs, "location")
-	if locationVal == nil || getStringValue(locationVal) != "Paris" {
-		t.Errorf("Expected arguments.location='Paris', got %v", locationVal)
+	if getStringValue(argsVal) != `{"location": "Paris"}` {
+		t.Errorf("Expected arguments='%s', got '%s'", `{"location": "Paris"}`, getStringValue(argsVal))
 	}
 }
 
-func TestMessageToAnyValue(t *testing.T) {
+func TestMessagePartToOTel_ToolCallResponse(t *testing.T) {
+	part := MessagePart{
+		Type:   "tool_call_response",
+		ID:     "call_123",
+		Name:   "get_weather",
+		Result: `{"temp": "22C"}`,
+	}
+
+	av := part.ToOTel()
+	kvs := getKvlist(av)
+
+	if kvs == nil {
+		t.Fatal("Expected kvlist, got nil")
+	}
+
+	// Check type
+	if typeVal := findInKvlist(kvs, "type"); getStringValue(typeVal) != "tool_call_response" {
+		t.Errorf("Expected type='tool_call_response'")
+	}
+
+	// Check id
+	if idVal := findInKvlist(kvs, "id"); getStringValue(idVal) != "call_123" {
+		t.Errorf("Expected id='call_123'")
+	}
+
+	// Check result
+	if resultVal := findInKvlist(kvs, "result"); getStringValue(resultVal) != `{"temp": "22C"}` {
+		t.Errorf("Expected result to match")
+	}
+}
+
+func TestMessageToOTel(t *testing.T) {
 	msg := Message{
 		Role: "user",
 		Parts: []MessagePart{
@@ -191,7 +215,7 @@ func TestMessageToAnyValue(t *testing.T) {
 		},
 	}
 
-	av := msg.ToAnyValue()
+	av := msg.ToOTel()
 	kvs := getKvlist(av)
 
 	if kvs == nil {
@@ -214,48 +238,7 @@ func TestMessageToAnyValue(t *testing.T) {
 	}
 }
 
-func TestMessageToAnyValue_WithFinishReason(t *testing.T) {
-	msg := Message{
-		Role: "assistant",
-		Parts: []MessagePart{
-			{Type: "text", Content: "The weather is sunny."},
-		},
-		FinishReason: "stop",
-	}
-
-	av := msg.ToAnyValue()
-	kvs := getKvlist(av)
-
-	// Check finish_reason is present
-	finishVal := findInKvlist(kvs, "finish_reason")
-	if finishVal == nil || getStringValue(finishVal) != "stop" {
-		t.Errorf("Expected finish_reason='stop', got %v", finishVal)
-	}
-}
-
-func TestSystemInstructionToAnyValue(t *testing.T) {
-	si := SystemInstruction{
-		Type:    "text",
-		Content: "You are a helpful assistant.",
-	}
-
-	av := si.ToAnyValue()
-	kvs := getKvlist(av)
-
-	if kvs == nil {
-		t.Fatal("Expected kvlist, got nil")
-	}
-
-	if typeVal := findInKvlist(kvs, "type"); getStringValue(typeVal) != "text" {
-		t.Errorf("Expected type='text'")
-	}
-
-	if contentVal := findInKvlist(kvs, "content"); getStringValue(contentVal) != "You are a helpful assistant." {
-		t.Errorf("Expected correct content")
-	}
-}
-
-func TestToolDefinitionToAnyValue(t *testing.T) {
+func TestToolDefinitionToOTel(t *testing.T) {
 	td := ToolDefinition{
 		Type:        "function",
 		Name:        "get_weather",
@@ -269,7 +252,7 @@ func TestToolDefinitionToAnyValue(t *testing.T) {
 		}`),
 	}
 
-	av := td.ToAnyValue()
+	av := td.ToOTel()
 	kvs := getKvlist(av)
 
 	if kvs == nil {
@@ -286,32 +269,16 @@ func TestToolDefinitionToAnyValue(t *testing.T) {
 		t.Errorf("Expected name='get_weather'")
 	}
 
-	// Check parameters is structured (kvlist), not a string
+	// Check parameters is present as a string (JSON)
 	paramsVal := findInKvlist(kvs, "parameters")
 	if paramsVal == nil {
 		t.Fatal("Expected parameters to be present")
 	}
 
-	paramsKvs := getKvlist(paramsVal)
-	if paramsKvs == nil {
-		t.Errorf("Expected parameters to be structured kvlist, got %T", paramsVal.Value)
-	}
-
-	// Check nested properties.location structure
-	propsVal := findInKvlist(paramsKvs, "properties")
-	if propsVal == nil {
-		t.Fatal("Expected properties to be present")
-	}
-
-	propsKvs := getKvlist(propsVal)
-	locationVal := findInKvlist(propsKvs, "location")
-	if locationVal == nil {
-		t.Fatal("Expected location property to be present")
-	}
-
-	locationKvs := getKvlist(locationVal)
-	if typeVal := findInKvlist(locationKvs, "type"); getStringValue(typeVal) != "string" {
-		t.Errorf("Expected location.type='string'")
+	// Parameters should be a string containing the JSON
+	paramsStr := getStringValue(paramsVal)
+	if paramsStr == "" {
+		t.Errorf("Expected parameters to be a non-empty string")
 	}
 }
 
@@ -356,26 +323,9 @@ func TestConvertConversationsToOTelFormat(t *testing.T) {
 		t.Errorf("Expected tool_call_response part type")
 	}
 
-	// Check output message has finish_reason
-	if outputMsgs[0].FinishReason != "stop" {
-		t.Errorf("Expected output finish_reason='stop', got '%s'", outputMsgs[0].FinishReason)
-	}
-}
-
-func TestCorpusToolDefinitionToToolDefinition(t *testing.T) {
-	ct := CorpusToolDefinition{
-		Name:        "search",
-		Description: "Search the web",
-		Parameters:  json.RawMessage(`{"type": "object"}`),
-	}
-
-	td := ct.ToToolDefinition()
-
-	if td.Type != "function" {
-		t.Errorf("Expected type='function', got '%s'", td.Type)
-	}
-	if td.Name != "search" {
-		t.Errorf("Expected name='search', got '%s'", td.Name)
+	// Check output message role
+	if outputMsgs[0].Role != "assistant" {
+		t.Errorf("Expected output role='assistant', got '%s'", outputMsgs[0].Role)
 	}
 }
 
@@ -424,6 +374,372 @@ func TestParseToolDefinitions(t *testing.T) {
 	if tools[1].Name != "func2" {
 		t.Errorf("Expected name='func2'")
 	}
+}
+
+func TestMessagesToOTel(t *testing.T) {
+	messages := []Message{
+		{
+			Role: "user",
+			Parts: []MessagePart{
+				{Type: "text", Content: "Hello"},
+			},
+		},
+		{
+			Role: "assistant",
+			Parts: []MessagePart{
+				{Type: "text", Content: "Hi!"},
+			},
+		},
+	}
+
+	av := MessagesToOTel(messages)
+
+	arr := getArray(av)
+	if len(arr) != 2 {
+		t.Fatalf("Expected 2 messages in array, got %d", len(arr))
+	}
+
+	// Check first message
+	msg0Kvs := getKvlist(arr[0])
+	if roleVal := findInKvlist(msg0Kvs, "role"); getStringValue(roleVal) != "user" {
+		t.Errorf("Expected first message role='user'")
+	}
+
+	// Check second message
+	msg1Kvs := getKvlist(arr[1])
+	if roleVal := findInKvlist(msg1Kvs, "role"); getStringValue(roleVal) != "assistant" {
+		t.Errorf("Expected second message role='assistant'")
+	}
+}
+
+func TestToolDefinitionsToOTel(t *testing.T) {
+	toolDefs := []ToolDefinition{
+		{Type: "function", Name: "func1", Description: "First"},
+		{Type: "function", Name: "func2", Description: "Second"},
+	}
+
+	av := ToolDefinitionsToOTel(toolDefs)
+
+	arr := getArray(av)
+	if len(arr) != 2 {
+		t.Fatalf("Expected 2 tool definitions in array, got %d", len(arr))
+	}
+}
+
+// Tests for OTel type structure validation
+
+func TestMessagePartToOTel_ReturnsKvlistValue(t *testing.T) {
+	part := MessagePart{Type: "text", Content: "Hello"}
+	av := part.ToOTel()
+
+	// Verify it's a KvlistValue type
+	kvlist := av.GetKvlistValue()
+	if kvlist == nil {
+		t.Fatalf("Expected KvlistValue, got %T", av.Value)
+	}
+
+	// Verify the kvlist contains KeyValue entries
+	if len(kvlist.Values) == 0 {
+		t.Fatal("Expected non-empty kvlist")
+	}
+
+	// Each entry should have Key and Value
+	for _, kv := range kvlist.Values {
+		if kv.Key == "" {
+			t.Error("Expected non-empty Key in KeyValue")
+		}
+		if kv.Value == nil {
+			t.Errorf("Expected non-nil Value for key '%s'", kv.Key)
+		}
+	}
+}
+
+func TestMessageToOTel_ReturnsKvlistWithRoleAndParts(t *testing.T) {
+	msg := Message{
+		Role: "user",
+		Parts: []MessagePart{
+			{Type: "text", Content: "Hello"},
+		},
+	}
+	av := msg.ToOTel()
+
+	// Verify it's a KvlistValue
+	kvlist := av.GetKvlistValue()
+	if kvlist == nil {
+		t.Fatalf("Expected KvlistValue, got %T", av.Value)
+	}
+
+	// Should have exactly "role" and "parts" keys
+	keys := make(map[string]bool)
+	for _, kv := range kvlist.Values {
+		keys[kv.Key] = true
+	}
+
+	if !keys["role"] {
+		t.Error("Expected 'role' key in Message kvlist")
+	}
+	if !keys["parts"] {
+		t.Error("Expected 'parts' key in Message kvlist")
+	}
+
+	// Verify 'role' is a StringValue
+	roleVal := findInKvlist(kvlist.Values, "role")
+	if roleVal.GetStringValue() == "" {
+		t.Errorf("Expected role to be StringValue, got %T", roleVal.Value)
+	}
+
+	// Verify 'parts' is an ArrayValue
+	partsVal := findInKvlist(kvlist.Values, "parts")
+	if partsVal.GetArrayValue() == nil {
+		t.Errorf("Expected parts to be ArrayValue, got %T", partsVal.Value)
+	}
+
+	// Verify each part in the array is a KvlistValue
+	for i, partVal := range partsVal.GetArrayValue().Values {
+		if partVal.GetKvlistValue() == nil {
+			t.Errorf("Expected parts[%d] to be KvlistValue, got %T", i, partVal.Value)
+		}
+	}
+}
+
+func TestMessagesToOTel_ReturnsArrayOfKvlists(t *testing.T) {
+	messages := []Message{
+		{Role: "user", Parts: []MessagePart{{Type: "text", Content: "Q1"}}},
+		{Role: "assistant", Parts: []MessagePart{{Type: "text", Content: "A1"}}},
+	}
+	av := MessagesToOTel(messages)
+
+	// Verify it's an ArrayValue
+	arr := av.GetArrayValue()
+	if arr == nil {
+		t.Fatalf("Expected ArrayValue, got %T", av.Value)
+	}
+
+	// Verify each element is a KvlistValue (representing a Message)
+	for i, elem := range arr.Values {
+		kvlist := elem.GetKvlistValue()
+		if kvlist == nil {
+			t.Errorf("Expected messages[%d] to be KvlistValue, got %T", i, elem.Value)
+		}
+	}
+}
+
+func TestToolDefinitionToOTel_ReturnsKvlistWithExpectedKeys(t *testing.T) {
+	td := ToolDefinition{
+		Type:        "function",
+		Name:        "test_func",
+		Description: "A test function",
+		Parameters:  json.RawMessage(`{"type":"object"}`),
+	}
+	av := td.ToOTel()
+
+	// Verify it's a KvlistValue
+	kvlist := av.GetKvlistValue()
+	if kvlist == nil {
+		t.Fatalf("Expected KvlistValue, got %T", av.Value)
+	}
+
+	// Should have expected keys
+	expectedKeys := []string{"type", "name", "description", "parameters"}
+	for _, key := range expectedKeys {
+		val := findInKvlist(kvlist.Values, key)
+		if val == nil {
+			t.Errorf("Expected key '%s' in ToolDefinition kvlist", key)
+		}
+	}
+}
+
+func TestMessagePartTypes_ReturnCorrectOTelStructure(t *testing.T) {
+	tests := []struct {
+		name         string
+		part         MessagePart
+		expectedKeys []string
+	}{
+		{
+			name:         "TextPart",
+			part:         MessagePart{Type: "text", Content: "Hello"},
+			expectedKeys: []string{"type", "content"},
+		},
+		{
+			name:         "ToolCallPart",
+			part:         MessagePart{Type: "tool_call", ID: "id1", Name: "func", Arguments: "{}"},
+			expectedKeys: []string{"type", "id", "name", "arguments"},
+		},
+		{
+			name:         "ToolCallResponsePart",
+			part:         MessagePart{Type: "tool_call_response", ID: "id1", Name: "func", Result: "ok"},
+			expectedKeys: []string{"type", "id", "name", "result"},
+		},
+		{
+			name:         "ThinkingPart",
+			part:         MessagePart{Type: "thinking", Content: "Let me think..."},
+			expectedKeys: []string{"type", "content"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			av := tt.part.ToOTel()
+
+			// Verify it's a KvlistValue
+			kvlist := av.GetKvlistValue()
+			if kvlist == nil {
+				t.Fatalf("Expected KvlistValue, got %T", av.Value)
+			}
+
+			// Verify all expected keys are present and are StringValues
+			for _, key := range tt.expectedKeys {
+				val := findInKvlist(kvlist.Values, key)
+				if val == nil {
+					t.Errorf("Expected key '%s' to be present", key)
+					continue
+				}
+				if val.GetStringValue() == "" && key != "content" {
+					t.Errorf("Expected '%s' to have a StringValue", key)
+				}
+			}
+		})
+	}
+}
+
+func TestGenAIAttributesFromEntry_OTelTypeStructure(t *testing.T) {
+	entry := &Entry{
+		Conversations: []Conversation{
+			{From: "human", Value: "Hello"},
+			{From: "gpt", Value: "Hi!"},
+		},
+		System: "Be helpful",
+		Tools:  `[{"name": "test", "description": "A test"}]`,
+	}
+
+	attrs := GenAIAttributesFromEntry(entry)
+
+	// Build a map for easier lookup
+	attrMap := make(map[string]*otlpCommon.AnyValue)
+	for _, attr := range attrs {
+		attrMap[attr.Key] = attr.Value
+	}
+
+	// Verify gen_ai.input.messages is ArrayValue of KvlistValues
+	if inputMsgs := attrMap["gen_ai.input.messages"]; inputMsgs != nil {
+		arr := inputMsgs.GetArrayValue()
+		if arr == nil {
+			t.Errorf("gen_ai.input.messages: expected ArrayValue, got %T", inputMsgs.Value)
+		} else {
+			for i, msg := range arr.Values {
+				if msg.GetKvlistValue() == nil {
+					t.Errorf("gen_ai.input.messages[%d]: expected KvlistValue, got %T", i, msg.Value)
+				}
+			}
+		}
+	} else {
+		t.Error("gen_ai.input.messages not found")
+	}
+
+	// Verify gen_ai.output.messages is ArrayValue of KvlistValues
+	if outputMsgs := attrMap["gen_ai.output.messages"]; outputMsgs != nil {
+		arr := outputMsgs.GetArrayValue()
+		if arr == nil {
+			t.Errorf("gen_ai.output.messages: expected ArrayValue, got %T", outputMsgs.Value)
+		} else {
+			for i, msg := range arr.Values {
+				if msg.GetKvlistValue() == nil {
+					t.Errorf("gen_ai.output.messages[%d]: expected KvlistValue, got %T", i, msg.Value)
+				}
+			}
+		}
+	} else {
+		t.Error("gen_ai.output.messages not found")
+	}
+
+	// Verify gen_ai.system_instructions is ArrayValue of KvlistValues (TextParts)
+	if sysInstr := attrMap["gen_ai.system_instructions"]; sysInstr != nil {
+		arr := sysInstr.GetArrayValue()
+		if arr == nil {
+			t.Errorf("gen_ai.system_instructions: expected ArrayValue, got %T", sysInstr.Value)
+		} else {
+			for i, part := range arr.Values {
+				kvlist := part.GetKvlistValue()
+				if kvlist == nil {
+					t.Errorf("gen_ai.system_instructions[%d]: expected KvlistValue, got %T", i, part.Value)
+				} else {
+					// Verify it has 'type' and 'content' keys
+					typeVal := findInKvlist(kvlist.Values, "type")
+					if typeVal == nil || typeVal.GetStringValue() != "text" {
+						t.Errorf("gen_ai.system_instructions[%d]: expected type='text'", i)
+					}
+				}
+			}
+		}
+	} else {
+		t.Error("gen_ai.system_instructions not found")
+	}
+
+	// Verify gen_ai.tool.definitions is ArrayValue of KvlistValues
+	if toolDefs := attrMap["gen_ai.tool.definitions"]; toolDefs != nil {
+		arr := toolDefs.GetArrayValue()
+		if arr == nil {
+			t.Errorf("gen_ai.tool.definitions: expected ArrayValue, got %T", toolDefs.Value)
+		} else {
+			for i, tool := range arr.Values {
+				kvlist := tool.GetKvlistValue()
+				if kvlist == nil {
+					t.Errorf("gen_ai.tool.definitions[%d]: expected KvlistValue, got %T", i, tool.Value)
+				} else {
+					// Verify it has expected keys
+					for _, key := range []string{"type", "name", "description"} {
+						if findInKvlist(kvlist.Values, key) == nil {
+							t.Errorf("gen_ai.tool.definitions[%d]: expected key '%s'", i, key)
+						}
+					}
+				}
+			}
+		}
+	} else {
+		t.Error("gen_ai.tool.definitions not found")
+	}
+}
+
+func TestOTelHelperFunctions(t *testing.T) {
+	// Test otelString
+	t.Run("otelString", func(t *testing.T) {
+		av := otelString("test")
+		if av.GetStringValue() != "test" {
+			t.Errorf("otelString: expected 'test', got %v", av.GetStringValue())
+		}
+	})
+
+	// Test otelArray
+	t.Run("otelArray", func(t *testing.T) {
+		av := otelArray(otelString("a"), otelString("b"))
+		arr := av.GetArrayValue()
+		if arr == nil || len(arr.Values) != 2 {
+			t.Errorf("otelArray: expected array of 2 elements")
+		}
+	})
+
+	// Test otelKVList
+	t.Run("otelKVList", func(t *testing.T) {
+		av := otelKVList(
+			otelKV("key1", otelString("val1")),
+			otelKV("key2", otelString("val2")),
+		)
+		kvlist := av.GetKvlistValue()
+		if kvlist == nil || len(kvlist.Values) != 2 {
+			t.Errorf("otelKVList: expected kvlist with 2 entries")
+		}
+	})
+
+	// Test otelKV
+	t.Run("otelKV", func(t *testing.T) {
+		kv := otelKV("mykey", otelString("myval"))
+		if kv.Key != "mykey" {
+			t.Errorf("otelKV: expected key='mykey', got '%s'", kv.Key)
+		}
+		if kv.Value.GetStringValue() != "myval" {
+			t.Errorf("otelKV: expected value='myval'")
+		}
+	})
 }
 
 // TestPrintGenAIStructure is a debug test to visualize the generated structure
