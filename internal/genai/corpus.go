@@ -205,41 +205,27 @@ func GenAIAttributesFromEntry(entry *Entry) []*otlpCommon.KeyValue {
 	responseID := fmt.Sprintf("resp-%d", rand.Int63())
 	attrs = append(attrs, stringAttr("gen_ai.response.id", responseID))
 
-	// Input messages as JSON string
-	// Format: [{"role":"user","parts":[{"type":"text","content":"..."}]}, {"role":"assistant","parts":[{"type":"tool_call","id":"call_123","name":"func","arguments":"{}"}]}, {"role":"tool","parts":[{"type":"tool_call_response","id":"call_123","result":"..."}]}]
+	// Input messages as native OTel array of KeyValueList
 	if len(inputMessages) > 0 {
-		if jsonBytes, err := json.Marshal(inputMessages); err == nil {
-			attrs = append(attrs, stringAttr("gen_ai.input.messages", string(jsonBytes)))
-		}
+		attrs = append(attrs, otelKV("gen_ai.input.messages", MessagesToOTel(inputMessages)))
 	}
 
-	// Output messages as JSON string
-	// Format: [{"role":"assistant","parts":[{"type":"text","content":"..."}]}]
+	// Output messages as native OTel array of KeyValueList
 	if len(outputMessages) > 0 {
-		if jsonBytes, err := json.Marshal(outputMessages); err == nil {
-			attrs = append(attrs, stringAttr("gen_ai.output.messages", string(jsonBytes)))
-		}
+		attrs = append(attrs, otelKV("gen_ai.output.messages", MessagesToOTel(outputMessages)))
 	}
 
-	// System instructions as JSON array string
-	// Format: [{"type":"text","content":"..."}]
+	// System instructions as native OTel array of TextParts
 	if entry.System != "" {
-		systemInstructions := []map[string]string{
-			{"type": "text", "content": entry.System},
-		}
-		if jsonBytes, err := json.Marshal(systemInstructions); err == nil {
-			attrs = append(attrs, stringAttr("gen_ai.system_instructions", string(jsonBytes)))
-		}
+		systemPart := MessagePart{Type: "text", Content: entry.System}
+		attrs = append(attrs, otelKV("gen_ai.system_instructions", otelArray(systemPart.ToOTel())))
 	}
 
-	// Tool definitions as JSON array string
-	// Format: [{"type":"function","name":"...","description":"...","parameters":{...}}]
+	// Tool definitions as native OTel array of KeyValueList
 	if entry.Tools != "" {
 		toolDefs := parseToolDefinitions(entry.Tools)
 		if len(toolDefs) > 0 {
-			if jsonBytes, err := json.Marshal(toolDefs); err == nil {
-				attrs = append(attrs, stringAttr("gen_ai.tool.definitions", string(jsonBytes)))
-			}
+			attrs = append(attrs, otelKV("gen_ai.tool.definitions", ToolDefinitionsToOTel(toolDefs)))
 		}
 	}
 
@@ -359,4 +345,125 @@ func floatAttr(key string, value float64) *otlpCommon.KeyValue {
 		Key:   key,
 		Value: &otlpCommon.AnyValue{Value: &otlpCommon.AnyValue_DoubleValue{DoubleValue: value}},
 	}
+}
+
+// OTel value constructors for idiomatic usage
+
+func otelString(s string) *otlpCommon.AnyValue {
+	return &otlpCommon.AnyValue{Value: &otlpCommon.AnyValue_StringValue{StringValue: s}}
+}
+
+func otelArray(values ...*otlpCommon.AnyValue) *otlpCommon.AnyValue {
+	return &otlpCommon.AnyValue{
+		Value: &otlpCommon.AnyValue_ArrayValue{
+			ArrayValue: &otlpCommon.ArrayValue{Values: values},
+		},
+	}
+}
+
+func otelKVList(kvs ...*otlpCommon.KeyValue) *otlpCommon.AnyValue {
+	return &otlpCommon.AnyValue{
+		Value: &otlpCommon.AnyValue_KvlistValue{
+			KvlistValue: &otlpCommon.KeyValueList{Values: kvs},
+		},
+	}
+}
+
+func otelKV(key string, value *otlpCommon.AnyValue) *otlpCommon.KeyValue {
+	return &otlpCommon.KeyValue{Key: key, Value: value}
+}
+
+// ToOTel converts a MessagePart to a native OTel KeyValueList.
+// Supports: TextPart, ToolCallPart, ToolCallResponsePart, ThinkingPart
+func (p MessagePart) ToOTel() *otlpCommon.AnyValue {
+	kvs := []*otlpCommon.KeyValue{otelKV("type", otelString(p.Type))}
+
+	switch p.Type {
+	case "text", "thinking":
+		if p.Content != "" {
+			kvs = append(kvs, otelKV("content", otelString(p.Content)))
+		}
+
+	case "tool_call":
+		if p.ID != "" {
+			kvs = append(kvs, otelKV("id", otelString(p.ID)))
+		}
+		if p.Name != "" {
+			kvs = append(kvs, otelKV("name", otelString(p.Name)))
+		}
+		if p.Arguments != "" {
+			kvs = append(kvs, otelKV("arguments", otelString(p.Arguments)))
+		}
+
+	case "tool_call_response":
+		if p.ID != "" {
+			kvs = append(kvs, otelKV("id", otelString(p.ID)))
+		}
+		if p.Name != "" {
+			kvs = append(kvs, otelKV("name", otelString(p.Name)))
+		}
+		if p.Result != "" {
+			kvs = append(kvs, otelKV("result", otelString(p.Result)))
+		}
+
+	default:
+		// For any other type, include all non-empty fields
+		if p.Content != "" {
+			kvs = append(kvs, otelKV("content", otelString(p.Content)))
+		}
+		if p.ID != "" {
+			kvs = append(kvs, otelKV("id", otelString(p.ID)))
+		}
+		if p.Name != "" {
+			kvs = append(kvs, otelKV("name", otelString(p.Name)))
+		}
+	}
+
+	return otelKVList(kvs...)
+}
+
+// ToOTel converts a Message to a native OTel KeyValueList with "role" and "parts" keys.
+func (m Message) ToOTel() *otlpCommon.AnyValue {
+	partsValues := make([]*otlpCommon.AnyValue, 0, len(m.Parts))
+	for _, part := range m.Parts {
+		partsValues = append(partsValues, part.ToOTel())
+	}
+
+	return otelKVList(
+		otelKV("role", otelString(m.Role)),
+		otelKV("parts", otelArray(partsValues...)),
+	)
+}
+
+// ToOTel converts a ToolDefinition to a native OTel KeyValueList.
+func (t ToolDefinition) ToOTel() *otlpCommon.AnyValue {
+	kvs := []*otlpCommon.KeyValue{
+		otelKV("type", otelString(t.Type)),
+		otelKV("name", otelString(t.Name)),
+		otelKV("description", otelString(t.Description)),
+	}
+
+	if len(t.Parameters) > 0 {
+		kvs = append(kvs, otelKV("parameters", otelString(string(t.Parameters))))
+	}
+
+	return otelKVList(kvs...)
+}
+
+// MessagesToOTel converts a slice of Messages to a native OTel ArrayValue.
+func MessagesToOTel(messages []Message) *otlpCommon.AnyValue {
+	values := make([]*otlpCommon.AnyValue, 0, len(messages))
+	for _, msg := range messages {
+		values = append(values, msg.ToOTel())
+	}
+	return otelArray(values...)
+}
+
+// ToolDefinitionsToOTel converts a slice of ToolDefinitions to a native OTel ArrayValue.
+func ToolDefinitionsToOTel(toolDefs []ToolDefinition) *otlpCommon.AnyValue {
+	values := make([]*otlpCommon.AnyValue, 0, len(toolDefs))
+	for _, tool := range toolDefs {
+		values = append(values, tool.ToOTel())
+	}
+	return otelArray(values...)
 }
